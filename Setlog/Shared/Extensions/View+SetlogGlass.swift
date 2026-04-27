@@ -5,11 +5,10 @@ extension View {
     /// Pass the shape that matches each component's design intent.
     @ViewBuilder
     func setlogGlass(
-        in shape: some Shape = Capsule(),
-        isEnabled: Bool = true
+        in shape: some Shape = Capsule()
     ) -> some View {
         if #available(iOS 26, *) {
-            self.glassEffect(.regular, in: shape, isEnabled: isEnabled)
+            self.glassEffect(.regular, in: shape)
         } else {
             self.background(.ultraThinMaterial, in: shape)
         }
