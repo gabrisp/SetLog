@@ -63,7 +63,10 @@ protocol WorkoutRepositoryProtocol {
     func createDayIfNeeded(dayKey: String) async throws -> WorkoutDayDTO
     func fetchWorkoutSessions(dayKey: String) async throws -> [WorkoutSessionDTO]
     func createWorkoutSession(dayKey: String, type: String, title: String) async throws -> WorkoutSessionDTO
-    func addExercise(toWorkoutSessionID: UUID, name: String, savedExerciseID: UUID?) async throws -> ExerciseEntryDTO
+    func fetchExercises(workoutSessionID: UUID) async throws -> [ExerciseEntryDTO]
+    func fetchSets(exerciseEntryID: UUID) async throws -> [WorkoutSetDTO]
+    func addExercise(toWorkoutSessionID: UUID, name: String, equipment: String?, savedExerciseID: UUID?) async throws -> ExerciseEntryDTO
+    func addSet(toExerciseEntryID: UUID, reps: Int16, weight: Double, unit: String) async throws -> WorkoutSetDTO
     func addSet(toExerciseEntryID: UUID, set: WorkoutSetDTO) async throws -> WorkoutSetDTO
     func duplicateSet(id: UUID, modifier: WorkoutCommandModifier?) async throws -> WorkoutSetDTO
     func deleteSet(id: UUID) async throws

@@ -17,10 +17,11 @@ struct BottomCommandInputBar: View {
                     .foregroundStyle(.secondary)
             }
 
-            TextField("Add exercise, set, or command…", text: $text, axis: .vertical)
+            TextField("Add exercise, set, or command...", text: $text, axis: .vertical)
                 .lineLimit(1...4)
                 .submitLabel(.send)
                 .onSubmit(onSubmit)
+                .disabled(isProcessing)
 
             if isProcessing {
                 ProgressView()
@@ -31,12 +32,14 @@ struct BottomCommandInputBar: View {
                         .font(.system(size: 28))
                         .foregroundStyle(text.isEmpty ? Color.secondary : Color.accentColor)
                 }
-                .disabled(text.isEmpty)
+                .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
+        .opacity(isProcessing ? 0.72 : 1)
+        .animation(.easeInOut(duration: 0.2), value: isProcessing)
         // TODO: apply setlogGlass(.regular, in: RoundedRectangle(cornerRadius: 20))
     }
 }
