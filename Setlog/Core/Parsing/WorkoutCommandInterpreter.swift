@@ -6,8 +6,6 @@ final class WorkoutCommandInterpreter {
     private let foundationModelsParser: FoundationModelsWorkoutCommandParser
     private let entitlementService: EntitlementServiceProtocol
 
-    private static let localConfidenceThreshold: Double = 0.75
-
     init(
         localParser: LocalWorkoutCommandParser = LocalWorkoutCommandParser(),
         entitlementService: EntitlementServiceProtocol
@@ -24,32 +22,77 @@ final class WorkoutCommandInterpreter {
 
         // 1) Foundation Models first.
         let fmPlan = await foundationModelsParser.parse(input: input, context: context)
-        if isHighConfidenceValid(fmPlan) {
+        if case .valid = fmPlan.validationResult {
             return fmPlan
         }
 
-        // 2) Local parser fallback.
+        // 2) Local parser fallback only when Foundation Models cannot return a valid command.
         let localPlan = await localParser.parse(input: input, context: context)
         if case .valid = localPlan.validationResult {
             return localPlan
         }
 
-        // 3) If FM is valid but low-confidence, still prefer it over unknown.
-        if case .valid = fmPlan.validationResult {
+        // 3) Keep FM result when it is explicit about gating/confirmation.
+        switch fmPlan.validationResult {
+        case .requiresConfirmation, .requiresProFeature:
             return fmPlan
+        case .valid, .invalid:
+            break
         }
 
-        // 4) Unknown fallback confirmation request.
+        // 4) Unknown fallback.
         if case .unknown = localPlan.command {
+            if let bestEffort = buildBestEffortExercisePlan(for: input) {
+                return bestEffort
+            }
+            if case .invalid(let fmReason) = fmPlan.validationResult {
+                let userFacingReason = fmReason.lowercased().contains("unsupportedlanguageorlocale")
+                    ? "AFM couldn't parse this locale/input and local fallback also failed."
+                    : "Couldn't understand command with AFM or local fallback."
+                return WorkoutCommandExecutionPlan(
+                    command: .unknown(rawText: input),
+                    validationResult: .invalid(reason: userFacingReason),
+                    metadata: ParsedCommandMetadata(
+                        confidence: 0,
+                        source: .fallback,
+                        needsConfirmation: true,
+                        userVisibleSummary: "AFM + local fallback failed (\(fmReason))"
+                    )
+                )
+            }
             return buildConfirmationPlan(for: input)
         }
 
         return localPlan
     }
 
-    private func isHighConfidenceValid(_ plan: WorkoutCommandExecutionPlan) -> Bool {
-        guard case .valid = plan.validationResult else { return false }
-        return plan.metadata.confidence >= Self.localConfidenceThreshold
+    private func buildBestEffortExercisePlan(for input: String) -> WorkoutCommandExecutionPlan? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let normalized = trimmed
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+
+        let blocked = ["borra", "elimina", "delete", "remove", "clear", "settings", "calendar", "ajustes", "calendario"]
+        guard !blocked.contains(where: normalized.contains) else { return nil }
+
+        let cleaned = trimmed
+            .replacingOccurrences(of: #"^\s*(quiero|hacer|hazme|anade|añade|add)\s+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard cleaned.count >= 3 else { return nil }
+
+        let metadata = ParsedCommandMetadata(
+            confidence: 0.55,
+            source: .fallback,
+            needsConfirmation: false,
+            userVisibleSummary: "Best effort: added exercise \(cleaned)"
+        )
+        let command = ParsedWorkoutCommand.addExercise(
+            AddExerciseCommand(name: cleaned, target: .currentWorkout, initialSet: nil, metadata: metadata)
+        )
+        return WorkoutCommandExecutionPlan(command: command, validationResult: .valid, metadata: metadata)
     }
 
     private func buildConfirmationPlan(for input: String) -> WorkoutCommandExecutionPlan {
