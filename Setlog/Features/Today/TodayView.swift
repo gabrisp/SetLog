@@ -162,6 +162,17 @@ struct TodayView: View {
             )
             viewModel.onAppear()
         }
+        .sheet(item: $viewModel.pendingCommandClarification) { clarification in
+            CommandClarificationSheet(
+                request: clarification.request,
+                customText: $viewModel.clarificationCustomText,
+                onSelectChoice: viewModel.chooseClarificationOption,
+                onSubmitCustom: viewModel.submitClarificationCustomText,
+                onDismiss: viewModel.dismissClarificationSheet
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     private func setSummary(_ set: WorkoutSetDTO) -> String {

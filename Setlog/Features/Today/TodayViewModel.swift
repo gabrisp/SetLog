@@ -18,6 +18,12 @@ final class TodayViewModel {
         var id: UUID { session.id }
     }
 
+    struct PendingCommandClarification: Identifiable {
+        let id: UUID
+        let request: CommandConfirmationRequest
+        let originalInput: String
+    }
+
     let dayKey: String
     let date: Date
 
@@ -32,6 +38,8 @@ final class TodayViewModel {
     var processingMessage: String? = nil
     var commandErrorMessage: String? = nil
     var recentCommandSummary: String? = nil
+    var pendingCommandClarification: PendingCommandClarification? = nil
+    var clarificationCustomText: String = ""
 
     let processingMessages: [String] = [
         "Thinking...",
@@ -107,6 +115,27 @@ final class TodayViewModel {
         Task {
             await submitCommandInternal(rawText: trimmed)
         }
+    }
+
+    func chooseClarificationOption(_ choice: CommandConfirmationChoice) {
+        guard !isProcessingCommand else { return }
+        Task {
+            await executeClarificationChoice(choice)
+        }
+    }
+
+    func submitClarificationCustomText() {
+        let custom = clarificationCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !custom.isEmpty else { return }
+        pendingCommandClarification = nil
+        clarificationCustomText = ""
+        commandInputText = custom
+        submitCommand()
+    }
+
+    func dismissClarificationSheet() {
+        pendingCommandClarification = nil
+        clarificationCustomText = ""
     }
 
     func startProcessingMessages() {
@@ -237,38 +266,30 @@ final class TodayViewModel {
 
         let plan = await commandInterpreter.interpret(input: rawText, context: context)
 
+        if case .requiresConfirmation(let request) = plan.validationResult {
+            presentCommandClarification(request, originalInput: rawText)
+            await saveCommandHistory(rawText: rawText, command: plan.command, success: false)
+            return
+        }
+        if case .askForConfirmation(let request) = plan.command {
+            presentCommandClarification(request, originalInput: rawText)
+            await saveCommandHistory(rawText: rawText, command: plan.command, success: false)
+            return
+        }
+
         do {
             summaryForHistory = try await execute(plan: plan, workoutRepository: workoutRepository)
             executionSucceeded = true
             commandInputText = ""
             recentCommandSummary = summaryForHistory
-
-            if let recentItemsRepository, !summaryForHistory.isEmpty {
-                try? await recentItemsRepository.saveRecentSnippet(
-                    title: summaryForHistory,
-                    payloadJSON: "{}",
-                    snippetType: "command",
-                    sourceDayKey: dayKey
-                )
-            }
+            await saveRecentSnippetIfNeeded(summaryForHistory)
 
             await loadSections()
         } catch {
             commandErrorMessage = error.localizedDescription
         }
 
-        if let commandHistoryRepository {
-            let item = CommandHistoryItemDTO(
-                id: UUID(),
-                rawText: rawText,
-                parsedCommandType: commandTypeName(for: plan.command),
-                dayKey: dayKey,
-                workoutSessionID: selectedWorkoutSessionID,
-                createdAt: Date(),
-                success: executionSucceeded
-            )
-            try? await commandHistoryRepository.save(item: item)
-        }
+        await saveCommandHistory(rawText: rawText, command: plan.command, success: executionSucceeded)
     }
 
     private func execute(plan: WorkoutCommandExecutionPlan, workoutRepository: WorkoutRepositoryProtocol) async throws -> String {
@@ -632,6 +653,112 @@ final class TodayViewModel {
         }
 
         return (normalized, nil)
+    }
+
+    private func presentCommandClarification(_ request: CommandConfirmationRequest, originalInput: String) {
+        pendingCommandClarification = PendingCommandClarification(
+            id: UUID(),
+            request: request,
+            originalInput: originalInput
+        )
+        clarificationCustomText = originalInput
+        commandErrorMessage = nil
+    }
+
+    private func executeClarificationChoice(_ choice: CommandConfirmationChoice) async {
+        guard let workoutRepository else {
+            commandErrorMessage = "Today dependencies are not available yet."
+            return
+        }
+        let clarificationRawText = pendingCommandClarification?.originalInput ?? choice.label
+        pendingCommandClarification = nil
+
+        isProcessingCommand = true
+        startProcessingMessages()
+        commandErrorMessage = nil
+        recentCommandSummary = nil
+
+        var executionSucceeded = false
+        defer {
+            stopProcessingMessages()
+            isProcessingCommand = false
+        }
+
+        let plan = WorkoutCommandExecutionPlan(
+            command: choice.command,
+            validationResult: .valid,
+            metadata: metadata(for: choice.command)
+        )
+
+        do {
+            let summary = try await execute(plan: plan, workoutRepository: workoutRepository)
+            recentCommandSummary = summary
+            pendingCommandClarification = nil
+            clarificationCustomText = ""
+            commandInputText = ""
+            executionSucceeded = true
+            await saveRecentSnippetIfNeeded(summary)
+            await loadSections()
+        } catch {
+            commandErrorMessage = error.localizedDescription
+        }
+
+        await saveCommandHistory(rawText: clarificationRawText, command: choice.command, success: executionSucceeded)
+    }
+
+    private func saveRecentSnippetIfNeeded(_ summary: String) async {
+        guard let recentItemsRepository, !summary.isEmpty else { return }
+        try? await recentItemsRepository.saveRecentSnippet(
+            title: summary,
+            payloadJSON: "{}",
+            snippetType: "command",
+            sourceDayKey: dayKey
+        )
+    }
+
+    private func saveCommandHistory(rawText: String, command: ParsedWorkoutCommand, success: Bool) async {
+        guard let commandHistoryRepository else { return }
+        let item = CommandHistoryItemDTO(
+            id: UUID(),
+            rawText: rawText,
+            parsedCommandType: commandTypeName(for: command),
+            dayKey: dayKey,
+            workoutSessionID: selectedWorkoutSessionID,
+            createdAt: Date(),
+            success: success
+        )
+        try? await commandHistoryRepository.save(item: item)
+    }
+
+    private func metadata(for command: ParsedWorkoutCommand) -> ParsedCommandMetadata {
+        switch command {
+        case .addExercise(let command): return command.metadata
+        case .addSet(let command): return command.metadata
+        case .addMultipleSets(let command): return command.metadata
+        case .duplicateSet(let command): return command.metadata
+        case .updateSet(let command): return command.metadata
+        case .deleteSet(let command): return command.metadata
+        case .saveExerciseAsFavorite(let command): return command.metadata
+        case .saveSetAsFavorite(let command): return command.metadata
+        case .addFavoriteToWorkout(let command): return command.metadata
+        case .addRecentToWorkout(let command): return command.metadata
+        case .startWorkoutSession(let command): return command.metadata
+        case .switchWorkoutSession(let command): return command.metadata
+        case .askForConfirmation:
+            return ParsedCommandMetadata(
+                confidence: 0,
+                source: .fallback,
+                needsConfirmation: true,
+                userVisibleSummary: "Command requires confirmation"
+            )
+        case .unknown:
+            return ParsedCommandMetadata(
+                confidence: 0,
+                source: .fallback,
+                needsConfirmation: true,
+                userVisibleSummary: "Unknown command"
+            )
+        }
     }
 }
 

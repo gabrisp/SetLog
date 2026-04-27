@@ -51,20 +51,12 @@ final class WorkoutCommandInterpreter {
                 return bestEffort
             }
             if case .invalid(let fmReason) = fmPlan.validationResult {
-                let userFacingReason = fmReason.lowercased().contains("unsupportedlanguageorlocale")
-                    ? "AFM couldn't parse this locale/input and local fallback also failed."
-                    : "Couldn't understand command with AFM or local fallback."
-                return WorkoutCommandExecutionPlan(
-                    command: .unknown(rawText: input),
-                    validationResult: .invalid(reason: userFacingReason),
-                    metadata: ParsedCommandMetadata(
-                        confidence: 0,
-                        source: .fallback,
-                        needsConfirmation: true,
-                        userVisibleSummary: "AFM + local fallback failed (\(fmReason))"
-                    )
-                )
+                return buildConfirmationPlan(for: input, debugReason: fmReason)
             }
+            return buildConfirmationPlan(for: input)
+        }
+
+        if case .invalid = localPlan.validationResult {
             return buildConfirmationPlan(for: input)
         }
 
@@ -151,18 +143,23 @@ final class WorkoutCommandInterpreter {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        let normalized = trimmed
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
+        let normalized = normalize(trimmed)
 
-        let blocked = ["borra", "elimina", "delete", "remove", "clear", "settings", "calendar", "ajustes", "calendario"]
+        let blocked = [
+            "borra", "elimina", "delete", "remove", "clear",
+            "settings", "calendar", "ajustes", "calendario",
+            "serie", "series", "set", "sets", "reps", "kg", "lb",
+            "duplica", "duplicate", "igual", "last", "ultima", "última"
+        ]
         guard !blocked.contains(where: normalized.contains) else { return nil }
 
         let cleaned = trimmed
             .replacingOccurrences(of: #"^\s*(quiero|hacer|hazme|anade|añade|add)\s+"#, with: "", options: .regularExpression)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
-        guard cleaned.count >= 3 else { return nil }
+        let words = cleaned.split(separator: " ")
+        guard cleaned.count >= 3, words.count <= 6 else { return nil }
+        guard cleaned.range(of: #"\d"#, options: .regularExpression) == nil else { return nil }
 
         let metadata = ParsedCommandMetadata(
             confidence: 0.55,
@@ -176,10 +173,12 @@ final class WorkoutCommandInterpreter {
         return WorkoutCommandExecutionPlan(command: command, validationResult: .valid, metadata: metadata)
     }
 
-    private func buildConfirmationPlan(for input: String) -> WorkoutCommandExecutionPlan {
+    private func buildConfirmationPlan(for input: String, debugReason: String? = nil) -> WorkoutCommandExecutionPlan {
+        let choices = buildConfirmationChoices(for: input)
+        let prompt = "No entendí del todo \"\(input)\". Elige qué querías hacer o escribe una opción personalizada."
         let confirmation = CommandConfirmationRequest(
-            prompt: "I couldn't understand \"\(input)\". Try rephrasing the command.",
-            choices: [],
+            prompt: prompt,
+            choices: choices,
             rawText: input
         )
         return WorkoutCommandExecutionPlan(
@@ -189,8 +188,122 @@ final class WorkoutCommandInterpreter {
                 confidence: 0,
                 source: .fallback,
                 needsConfirmation: true,
-                userVisibleSummary: "Couldn't understand command"
+                userVisibleSummary: debugReason.map { "Couldn't understand command (\($0))" } ?? "Couldn't understand command"
             )
         )
+    }
+
+    private func buildConfirmationChoices(for input: String) -> [CommandConfirmationChoice] {
+        let normalized = normalize(input)
+        let cleanedExerciseName = cleanedExerciseCandidate(from: input)
+        let suggestedSetsCount = extractSuggestedSetCount(from: normalized)
+
+        let addExercise = CommandConfirmationChoice(
+            label: "Añadir ejercicio: \(cleanedExerciseName)",
+            command: .addExercise(
+                AddExerciseCommand(
+                    name: cleanedExerciseName,
+                    target: .currentWorkout,
+                    initialSet: nil,
+                    metadata: fallbackMetadata("Clarified: add exercise")
+                )
+            )
+        )
+
+        let addSingleSet = CommandConfirmationChoice(
+            label: "Añadir 1 serie al último ejercicio",
+            command: .addSet(
+                AddSetCommand(
+                    target: .lastTouchedExercise,
+                    set: ParsedSet(reps: nil, weight: nil, unit: nil),
+                    metadata: fallbackMetadata("Clarified: add one set")
+                )
+            )
+        )
+
+        let addMultipleSets = CommandConfirmationChoice(
+            label: "Añadir \(suggestedSetsCount) series al último ejercicio",
+            command: .addMultipleSets(
+                AddMultipleSetsCommand(
+                    target: .lastTouchedExercise,
+                    sets: Array(repeating: ParsedSet(reps: nil, weight: nil, unit: nil), count: suggestedSetsCount),
+                    metadata: fallbackMetadata("Clarified: add multiple sets")
+                )
+            )
+        )
+
+        let duplicateSet = CommandConfirmationChoice(
+            label: "Duplicar la última serie",
+            command: .duplicateSet(
+                DuplicateSetCommand(
+                    target: .lastTouchedSet,
+                    modifier: nil,
+                    metadata: fallbackMetadata("Clarified: duplicate last set")
+                )
+            )
+        )
+
+        let deleteSet = CommandConfirmationChoice(
+            label: "Borrar la última serie",
+            command: .deleteSet(
+                DeleteSetCommand(
+                    target: .lastTouchedSet,
+                    metadata: fallbackMetadata("Clarified: delete last set")
+                )
+            )
+        )
+
+        if normalized.contains("borra") || normalized.contains("elimina") || normalized.contains("delete") || normalized.contains("remove") {
+            return [deleteSet, duplicateSet, addSingleSet, addMultipleSets, addExercise]
+        }
+        if normalized.contains("serie") || normalized.contains("set") {
+            return [addSingleSet, addMultipleSets, duplicateSet, addExercise, deleteSet]
+        }
+        return [addExercise, addSingleSet, addMultipleSets, duplicateSet, deleteSet]
+    }
+
+    private func cleanedExerciseCandidate(from input: String) -> String {
+        let cleaned = input
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"^\s*(quiero|hacer|hazme|anade|añade|agrega|pon|add)\s+"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleaned.isEmpty ? input : cleaned
+    }
+
+    private func extractSuggestedSetCount(from normalized: String) -> Int {
+        if let match = normalized.range(of: #"\b(\d+)\s*(series|serie|sets?|set)\b"#, options: .regularExpression) {
+            let chunk = String(normalized[match])
+            if let n = Int(chunk.components(separatedBy: CharacterSet.decimalDigits.inverted).joined()),
+               n > 1, n <= 10 {
+                return n
+            }
+        }
+
+        let tokens: [String: Int] = [
+            "dos": 2, "two": 2,
+            "tres": 3, "three": 3,
+            "cuatro": 4, "four": 4,
+            "cinco": 5, "five": 5
+        ]
+        for (token, count) in tokens where normalized.contains(token) {
+            return count
+        }
+        return 2
+    }
+
+    private func fallbackMetadata(_ summary: String) -> ParsedCommandMetadata {
+        ParsedCommandMetadata(
+            confidence: 0.5,
+            source: .fallback,
+            needsConfirmation: false,
+            userVisibleSummary: summary
+        )
+    }
+
+    private func normalize(_ text: String) -> String {
+        text
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
