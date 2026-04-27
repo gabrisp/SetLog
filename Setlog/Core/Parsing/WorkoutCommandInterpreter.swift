@@ -36,7 +36,7 @@ final class WorkoutCommandInterpreter {
         // 4. If local result is .unknown, build a confirmation request
         if case .unknown = localPlan.command {
             let confirmation = CommandConfirmationRequest(
-                prompt: "I didn't understand "\(input)". Try rephrasing or pick an action:",
+                prompt: "I didn't understand \"\(input)\". Try rephrasing or pick an action:",
                 choices: [],
                 rawText: input
             )
