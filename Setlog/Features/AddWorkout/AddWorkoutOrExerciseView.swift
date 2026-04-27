@@ -12,10 +12,8 @@ struct AddWorkoutOrExerciseView: View {
     var body: some View {
         List {
             Section {
-                Button {
+                PlusActionRow(label: "Start New Workout") {
                     viewModel.startNewWorkoutSession()
-                } label: {
-                    Label("Start New Workout", systemImage: "plus.circle")
                 }
             }
 
@@ -32,16 +30,17 @@ struct AddWorkoutOrExerciseView: View {
             }
 
             Section {
-                Button {
+                PlusActionRow(label: "Add Exercise Manually") {
                     // TODO: Open manual exercise entry
-                } label: {
-                    Label("Add Exercise Manually", systemImage: "square.and.pencil")
                 }
             }
         }
         .navigationTitle("Add")
         .navigationBarTitleDisplayMode(.inline)
         .presentationDetents([.medium, .large])
-        .onAppear { viewModel.load() }
+        .onAppear {
+            viewModel.wireRouter(router)
+            viewModel.load()
+        }
     }
 }

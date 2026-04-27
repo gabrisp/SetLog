@@ -8,10 +8,14 @@ final class AddWorkoutOrExerciseViewModel {
     // TODO: var favorites: [FavoriteWorkoutSnippetDTO] = []
     // TODO: var recents: [RecentWorkoutSnippetDTO] = []
 
-    private let router: AppRouter
+    private var router: AppRouter
 
     init(dayKey: String, router: AppRouter) {
         self.dayKey = dayKey
+        self.router = router
+    }
+
+    func wireRouter(_ router: AppRouter) {
         self.router = router
     }
 

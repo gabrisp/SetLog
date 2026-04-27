@@ -10,6 +10,7 @@ struct SetlogApp: App {
             RootView(userPreferencesService: environment.userPreferencesService)
                 .environment(environment)
                 .environment(environment.router)
+                .environment(\.appEnvironment, environment)
         }
     }
 }

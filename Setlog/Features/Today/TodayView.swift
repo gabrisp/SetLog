@@ -6,19 +6,25 @@ struct TodayView: View {
     @State private var viewModel: TodayViewModel
 
     init(dayKey: String) {
+        // ViewModel is initialized with a placeholder router;
+        // the real router is injected on onAppear via wireRouter()
         _viewModel = State(wrappedValue: TodayViewModel(dayKey: dayKey, router: AppRouter()))
     }
 
     var body: some View {
+        @Bindable var viewModel = viewModel
+
         ZStack(alignment: .bottom) {
             // MARK: Workout scroll area
             ScrollView {
                 VStack(spacing: 16) {
                     // TODO: Render workoutSessions and their exercises/sets
-                    Text("No workouts yet for \(viewModel.dayKey)")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 80)
+                    EmptyStateView(
+                        systemImage: "figure.strengthtraining.traditional",
+                        title: "No workouts yet",
+                        subtitle: "Type a command below to add your first exercise."
+                    )
+                    .padding(.top, 60)
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 120) // clearance for input bar
@@ -28,12 +34,11 @@ struct TodayView: View {
             VStack(spacing: 0) {
                 Divider()
                 BottomCommandInputBar(
-                    text: Bindable(viewModel).commandInputText,
+                    text: $viewModel.commandInputText,
                     isProcessing: viewModel.isProcessingCommand,
                     onSubmit: viewModel.submitCommand,
                     onPlusTap: viewModel.openAddWorkoutOrExerciseSheet
                 )
-                .padding(.bottom, 0)
             }
             .background(.bar)
         }
@@ -52,7 +57,9 @@ struct TodayView: View {
         }
         .navigationTitle(viewModel.dayKey)
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(false)
-        .onAppear { viewModel.onAppear() }
+        .onAppear {
+            viewModel.wireRouter(router)
+            viewModel.onAppear()
+        }
     }
 }

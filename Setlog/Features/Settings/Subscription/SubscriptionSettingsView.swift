@@ -6,8 +6,24 @@ struct SubscriptionSettingsView: View {
     @State private var viewModel: SubscriptionSettingsViewModel?
 
     var body: some View {
-        let vm = viewModel ?? SubscriptionSettingsViewModel(entitlementService: environment.entitlementService)
+        Group {
+            if let vm = viewModel {
+                contentView(vm: vm)
+            } else {
+                ProgressView()
+            }
+        }
+        .navigationTitle("Subscription")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if viewModel == nil {
+                viewModel = SubscriptionSettingsViewModel(entitlementService: environment.entitlementService)
+            }
+        }
+    }
 
+    @ViewBuilder
+    private func contentView(vm: SubscriptionSettingsViewModel) -> some View {
         List {
             Section {
                 if vm.isPro {
@@ -28,13 +44,6 @@ struct SubscriptionSettingsView: View {
             Section {
                 Button("Restore Purchases", action: vm.restorePurchases)
                     .foregroundStyle(.secondary)
-            }
-        }
-        .navigationTitle("Subscription")
-        .navigationBarTitleDisplayMode(.inline)
-        .onAppear {
-            if viewModel == nil {
-                viewModel = SubscriptionSettingsViewModel(entitlementService: environment.entitlementService)
             }
         }
     }

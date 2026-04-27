@@ -18,11 +18,15 @@ final class TodayViewModel {
 
     // TODO: var pendingConfirmation: CommandConfirmationRequest? = nil
 
-    private let router: AppRouter
+    private var router: AppRouter
 
     init(dayKey: String, router: AppRouter) {
         self.dayKey = dayKey
         self.date = Date.date(fromDayKey: dayKey) ?? Date()
+        self.router = router
+    }
+
+    func wireRouter(_ router: AppRouter) {
         self.router = router
     }
 
