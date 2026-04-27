@@ -42,6 +42,34 @@ struct SettingsView: View {
                 }
                 .foregroundStyle(.orange)
             }
+
+            if let viewModel {
+                Section("AI Debug") {
+                    debugRow("FM framework present", value: boolLabel(viewModel.fmDebugStatus.frameworkPresent))
+                    debugRow("FM runtime supported", value: boolLabel(viewModel.fmDebugStatus.runtimeSupported))
+                    debugRow("FM model available", value: boolLabel(viewModel.fmDebugStatus.modelAvailable))
+                    debugRow("Current locale", value: viewModel.fmDebugStatus.currentLocaleIdentifier)
+                    debugRow("Locale supported", value: boolLabel(viewModel.fmDebugStatus.supportsCurrentLocale))
+                    debugRow("FM availability", value: viewModel.fmDebugStatus.availabilityDescription)
+                    debugRow("Supported languages", value: viewModel.fmDebugStatus.supportedLanguagesPreview)
+                    debugRow("Interpreter mode", value: "Foundation Models first, local fallback")
+                    debugRow("Last AFM outcome", value: viewModel.fmDiagnostics.lastOutcome)
+                    debugRow("Last AFM path", value: viewModel.fmDiagnostics.lastPath)
+                    if let reason = viewModel.fmDiagnostics.lastReason, !reason.isEmpty {
+                        debugRow("Last AFM reason", value: reason)
+                    }
+                    if let at = viewModel.fmDiagnostics.lastAttemptAt {
+                        debugRow("Last AFM attempt", value: dateLabel(at))
+                    }
+                    if !viewModel.fmDiagnostics.lastInputPreview.isEmpty {
+                        debugRow("Last input", value: viewModel.fmDiagnostics.lastInputPreview)
+                    }
+
+                    Button("Refresh AFM status") {
+                        viewModel.refreshAIFeaturesDebug()
+                    }
+                }
+            }
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
@@ -53,5 +81,26 @@ struct SettingsView: View {
                 )
             }
         }
+    }
+
+    private func debugRow(_ title: String, value: String) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func boolLabel(_ value: Bool) -> String {
+        value ? "Yes" : "No"
+    }
+
+    private func dateLabel(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .medium
+        return formatter.string(from: date)
     }
 }
