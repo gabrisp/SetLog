@@ -73,24 +73,21 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
     }
 
     private func tryAddCountOnlySets(normalized: String) -> WorkoutCommandExecutionPlan? {
-        let pattern = #"(?:(?:anade|anado|anadir|add|haz|hazme|do)\s+)?(?:(\d+|una|one)\s+)?(?:series|serie|sets?|set)\b"#
+        let pattern = #"(?:(?:anade|anado|anadir|agrega|suma|pon|add|haz|hazme|do)\s+)?(?:(\d+|una|uno|one|dos|two|tres|three|cuatro|four|cinco|five|seis|six|siete|seven|ocho|eight|nueve|nine|diez|ten)\s+)?(?:series|serie|sets?|set)\b"#
         guard let groups = captureGroups(pattern: pattern, in: normalized), groups.count >= 2 else {
             return nil
         }
 
         let countToken = groups[1]
-        let count: Int
-        if countToken == "una" || countToken == "one" || countToken.isEmpty {
-            count = 1
-        } else {
-            guard let parsed = Int(countToken), parsed > 0 else { return nil }
-            count = parsed
-        }
+        guard let count = parseSetCountToken(countToken) else { return nil }
 
         guard normalized.contains("serie") || normalized.contains("set") else { return nil }
         guard normalized.contains("anade")
                 || normalized.contains("anado")
                 || normalized.contains("anadir")
+                || normalized.contains("agrega")
+                || normalized.contains("suma")
+                || normalized.contains("pon")
                 || normalized.contains("add")
                 || normalized.contains("haz")
                 || normalized.contains("hazme")
@@ -151,6 +148,40 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
         }
 
         return nil
+    }
+
+    private func parseSetCountToken(_ token: String) -> Int? {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return 1 }
+
+        if let parsed = Int(trimmed), parsed > 0 {
+            return parsed
+        }
+
+        switch trimmed {
+        case "una", "uno", "one":
+            return 1
+        case "dos", "two":
+            return 2
+        case "tres", "three":
+            return 3
+        case "cuatro", "four":
+            return 4
+        case "cinco", "five":
+            return 5
+        case "seis", "six":
+            return 6
+        case "siete", "seven":
+            return 7
+        case "ocho", "eight":
+            return 8
+        case "nueve", "nine":
+            return 9
+        case "diez", "ten":
+            return 10
+        default:
+            return nil
+        }
     }
 
     private func parseNameRepsWeightPattern(normalized: String, preferredUnit: String) -> (exerciseName: String, set: ParsedSet, confidence: Double)? {
