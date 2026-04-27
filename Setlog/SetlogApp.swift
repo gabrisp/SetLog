@@ -9,6 +9,7 @@ struct SetlogApp: App {
         WindowGroup {
             RootView(userPreferencesService: environment.userPreferencesService)
                 .environment(environment)
+                .environment(environment.router)
         }
     }
 }
