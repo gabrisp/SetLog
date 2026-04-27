@@ -1,9 +1,113 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="1" systemVersion="11A491" minimumToolsVersion="Automatic" sourceLanguage="Swift" usedWithCloudKit="false" userDefinedModelVersionIdentifier="">
-    <entity name="Item" representedClassName="Item" syncable="YES" codeGenerationType="class">
-        <attribute name="timestamp" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+<model type="com.apple.IDECoreDataModeler.DataModel" documentVersion="1.0" lastSavedToolsVersion="23788" systemVersion="24F74" minimumToolsVersion="Automatic" sourceLanguage="Swift" userDefinedModelVersionIdentifier="">
+    <entity name="WorkoutDay" representedClassName="WorkoutDay" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="date" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="dayKey" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="WorkoutSession" representedClassName="WorkoutSession" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="dayKey" attributeType="String" defaultValueString=""/>
+        <attribute name="endedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="orderIndex" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="startedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="title" attributeType="String" defaultValueString=""/>
+        <attribute name="type" attributeType="String" defaultValueString="strength"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="ExerciseEntry" representedClassName="ExerciseEntry" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="equipment" optional="YES" attributeType="String"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="name" attributeType="String" defaultValueString=""/>
+        <attribute name="normalizedName" attributeType="String" defaultValueString=""/>
+        <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="orderIndex" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="primaryMusclesText" optional="YES" attributeType="String"/>
+        <attribute name="savedExerciseID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="secondaryMusclesText" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="workoutSessionID" attributeType="UUID" usesScalarValueType="NO"/>
+    </entity>
+    <entity name="WorkoutSet" representedClassName="WorkoutSet" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="distanceMeters" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="durationSeconds" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="exerciseEntryID" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isFailure" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="isWarmup" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="notes" optional="YES" attributeType="String"/>
+        <attribute name="orderIndex" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="reps" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="rir" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
+        <attribute name="rpe" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="unit" attributeType="String" defaultValueString="kg"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="weight" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+    </entity>
+    <entity name="SavedExercise" representedClassName="SavedExercise" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="descriptionText" optional="YES" attributeType="String"/>
+        <attribute name="equipment" optional="YES" attributeType="String"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="imageFileName" optional="YES" attributeType="String"/>
+        <attribute name="instructionsText" optional="YES" attributeType="String"/>
+        <attribute name="isArchived" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="lastUsedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="name" attributeType="String" defaultValueString=""/>
+        <attribute name="normalizedName" attributeType="String" defaultValueString=""/>
+        <attribute name="primaryMusclesText" optional="YES" attributeType="String"/>
+        <attribute name="secondaryMusclesText" optional="YES" attributeType="String"/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="useCount" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+    </entity>
+    <entity name="FavoriteWorkoutSnippet" representedClassName="FavoriteWorkoutSnippet" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lastUsedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="payloadJSON" attributeType="String" defaultValueString="{}"/>
+        <attribute name="savedExerciseID" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="snippetType" attributeType="String" defaultValueString="exercise"/>
+        <attribute name="title" attributeType="String" defaultValueString=""/>
+        <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="useCount" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+    </entity>
+    <entity name="RecentWorkoutSnippet" representedClassName="RecentWorkoutSnippet" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="decayScore" attributeType="Double" defaultValueString="1.0" usesScalarValueType="YES"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lastUsedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="normalizedTitle" attributeType="String" defaultValueString=""/>
+        <attribute name="payloadJSON" attributeType="String" defaultValueString="{}"/>
+        <attribute name="snippetType" attributeType="String" defaultValueString="exercise"/>
+        <attribute name="sourceDayKey" optional="YES" attributeType="String"/>
+        <attribute name="sourceExerciseEntryID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="sourceWorkoutSessionID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="title" attributeType="String" defaultValueString=""/>
+        <attribute name="useCount" attributeType="Integer 32" defaultValueString="0" usesScalarValueType="YES"/>
+    </entity>
+    <entity name="CommandHistoryItem" representedClassName="CommandHistoryItem" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="dayKey" attributeType="String" defaultValueString=""/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="parsedCommandType" optional="YES" attributeType="String"/>
+        <attribute name="rawText" attributeType="String" defaultValueString=""/>
+        <attribute name="success" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
+        <attribute name="workoutSessionID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
     </entity>
     <elements>
-        <element name="Item" positionX="-63" positionY="-18" width="128" height="44"/>
+        <element name="WorkoutDay" positionX="-63" positionY="-18" width="128" height="119"/>
+        <element name="WorkoutSession" positionX="80" positionY="-18" width="128" height="239"/>
+        <element name="ExerciseEntry" positionX="240" positionY="-18" width="128" height="284"/>
+        <element name="WorkoutSet" positionX="400" positionY="-18" width="128" height="359"/>
+        <element name="SavedExercise" positionX="-63" positionY="200" width="128" height="329"/>
+        <element name="FavoriteWorkoutSnippet" positionX="80" positionY="300" width="128" height="209"/>
+        <element name="RecentWorkoutSnippet" positionX="240" positionY="300" width="128" height="299"/>
+        <element name="CommandHistoryItem" positionX="400" positionY="300" width="128" height="164"/>
     </elements>
 </model>
