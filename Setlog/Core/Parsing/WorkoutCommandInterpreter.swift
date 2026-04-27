@@ -5,7 +5,7 @@ final class WorkoutCommandInterpreter {
     private let localParser: LocalWorkoutCommandParser
     private let foundationModelsParser: FoundationModelsWorkoutCommandParser
     private let entitlementService: EntitlementServiceProtocol
-    private static let afmPreferredConfidence: Double = 0.78
+    private static let afmPreferredConfidence: Double = 0.9
 
     init(
         localParser: LocalWorkoutCommandParser = LocalWorkoutCommandParser(),
@@ -73,19 +73,22 @@ final class WorkoutCommandInterpreter {
         fmPlan: WorkoutCommandExecutionPlan,
         localPlan: WorkoutCommandExecutionPlan
     ) -> WorkoutCommandExecutionPlan {
+        // Reliability first: local parser should be the default winner when both plans are valid.
+        if localPlan.metadata.confidence >= 0.8 {
+            return localPlan
+        }
+
         if shouldPreferLocal(for: input, fmPlan: fmPlan, localPlan: localPlan) {
             return localPlan
         }
 
-        if fmPlan.metadata.confidence >= Self.afmPreferredConfidence {
+        // AFM only wins when it is clearly stronger.
+        if fmPlan.metadata.confidence >= Self.afmPreferredConfidence
+            && fmPlan.metadata.confidence > localPlan.metadata.confidence + 0.1 {
             return fmPlan
         }
 
-        if localPlan.metadata.confidence > fmPlan.metadata.confidence {
-            return localPlan
-        }
-
-        return fmPlan
+        return localPlan
     }
 
     private func shouldPreferLocal(
