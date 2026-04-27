@@ -4,144 +4,246 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
 
     private static let confidenceThreshold: Double = 0.75
 
-    func parse(input: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan {
-        let normalized = input.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+    func parse(input: String, context: WorkoutCommandContext) async -> WorkoutCommandExecutionPlan {
+        parseSynchronously(input: input, context: context)
+    }
 
-        if let plan = tryDeleteLastSet(normalized: normalized, context: context) { return plan }
-        if let plan = tryDuplicateSetWithModifier(normalized: normalized, context: context) { return plan }
-        if let plan = tryAddSetPattern(normalized: normalized, context: context) { return plan }
-        if let plan = tryAddExercise(normalized: normalized, context: context) { return plan }
+    private func parseSynchronously(input: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = normalize(trimmed)
+
+        guard !normalized.isEmpty else {
+            return unknown(rawText: input)
+        }
+
+        if let plan = tryDeleteLastSet(normalized: normalized) { return plan }
+        if let plan = tryDuplicateSetWithModifier(normalized: normalized) { return plan }
+        if let plan = tryAddMultipleSetsPattern(normalized: normalized, context: context) { return plan }
+        if let plan = tryAddSingleSetPattern(normalized: normalized, context: context) { return plan }
+        if let plan = tryAddExercise(normalized: normalized) { return plan }
 
         return unknown(rawText: input)
     }
 
     // MARK: - Pattern matchers
 
-    // "borra la última serie" / "elimina la última serie" / "delete the last set"
-    private func tryDeleteLastSet(normalized: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan? {
-        let triggers = ["borra la última serie", "elimina la última serie", "delete the last set", "remove last set"]
-        guard triggers.contains(where: { normalized.contains($0) }) else { return nil }
+    private func tryDeleteLastSet(normalized: String) -> WorkoutCommandExecutionPlan? {
+        let triggers = [
+            "borra la ultima serie", "elimina la ultima serie", "borra ultima serie", "elimina ultima serie",
+            "delete last set", "delete the last set", "remove last set", "remove the last set"
+        ]
+        guard triggers.contains(where: normalized.contains) else { return nil }
 
-        let command = ParsedWorkoutCommand.deleteSet(DeleteSetCommand(
-            target: .lastTouchedSet,
-            metadata: metadata(confidence: 0.95, summary: "Delete last set")
-        ))
-        return plan(command: command, confidence: 0.95)
+        let meta = metadata(confidence: 0.95, summary: "Delete last set")
+        let command = ParsedWorkoutCommand.deleteSet(DeleteSetCommand(target: .lastTouchedSet, metadata: meta))
+        return plan(command: command, metadata: meta)
     }
 
-    // "añade una serie igual" / "add another set" optionally "con Xkg menos / X reps menos"
-    private func tryDuplicateSetWithModifier(normalized: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan? {
-        let duplicateTriggers = ["añade una serie igual", "otra serie igual", "add another set", "añade otra serie"]
-        guard duplicateTriggers.contains(where: { normalized.contains($0) }) else { return nil }
+    private func tryDuplicateSetWithModifier(normalized: String) -> WorkoutCommandExecutionPlan? {
+        let duplicateTriggers = [
+            "otra igual", "anade una serie igual", "anade otra serie igual", "anade otra serie",
+            "add another set", "same set", "same again", "add same set"
+        ]
+        guard duplicateTriggers.contains(where: normalized.contains) else { return nil }
+
+        var target: WorkoutCommandTarget = .lastTouchedSet
+        if normalized.contains("ejercicio anterior") || normalized.contains("previous exercise") {
+            target = .previousExercise
+        } else if normalized.contains("este ejercicio") || normalized.contains("this exercise") {
+            target = .selectedExercise
+        }
 
         var modifier = WorkoutCommandModifier()
         modifier.weightDelta = extractWeightDelta(from: normalized)
         modifier.repsDelta = extractRepsDelta(from: normalized)
 
-        let summary = buildModifierSummary(modifier: modifier, base: "Duplicate last set")
-        let command = ParsedWorkoutCommand.duplicateSet(DuplicateSetCommand(
-            target: .lastTouchedSet,
-            modifier: (modifier.weightDelta != nil || modifier.repsDelta != nil) ? modifier : nil,
-            metadata: metadata(confidence: 0.90, summary: summary)
-        ))
-        return plan(command: command, confidence: 0.90)
-    }
-
-    // "curl bayesian 8 reps 25kg" — exercise name + reps + weight pattern
-    private func tryAddSetPattern(normalized: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan? {
-        guard let parsed = extractExerciseRepsWeight(from: normalized) else { return nil }
-
-        let set = ParsedSet(
-            reps: parsed.reps,
-            weight: parsed.weight,
-            unit: parsed.unit ?? context.preferredWeightUnit
+        let hasModifier = modifier.weightDelta != nil || modifier.repsDelta != nil
+        let summary = buildModifierSummary(modifier: modifier, base: "Duplicate set")
+        let meta = metadata(confidence: hasModifier ? 0.92 : 0.95, summary: summary)
+        let command = ParsedWorkoutCommand.duplicateSet(
+            DuplicateSetCommand(target: target, modifier: hasModifier ? modifier : nil, metadata: meta)
         )
-        let command = ParsedWorkoutCommand.addSet(AddSetCommand(
-            target: .exerciseName(parsed.exerciseName),
-            set: set,
-            metadata: metadata(confidence: 0.85, summary: "Add set to \(parsed.exerciseName)")
-        ))
-        return plan(command: command, confidence: 0.85)
+        return plan(command: command, metadata: meta)
     }
 
-    // "añade el ejercicio pull" / "añádeme el curl bayesian" / "add exercise bench press"
-    private func tryAddExercise(normalized: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan? {
-        let triggers = ["añade el ejercicio", "añádeme el", "añade ", "add exercise", "add the exercise"]
-        for trigger in triggers {
-            if normalized.hasPrefix(trigger) {
-                let name = String(normalized.dropFirst(trigger.count)).trimmingCharacters(in: .whitespaces)
-                guard !name.isEmpty else { continue }
+    private func tryAddMultipleSetsPattern(normalized: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan? {
+        let pattern = #"^(.+?)\s+(\d+)\s*x\s*(\d+)\s+((?:\d+(?:[\.,]\d+)?)\s*(?:kg|lb)|peso corporal|bodyweight)(?:\s+(.+))?$"#
+        guard let groups = captureGroups(pattern: pattern, in: normalized), groups.count >= 5 else { return nil }
 
-                let command = ParsedWorkoutCommand.addExercise(AddExerciseCommand(
-                    name: name,
-                    target: .currentWorkout,
-                    initialSet: nil,
-                    metadata: metadata(confidence: 0.80, summary: "Add exercise: \(name)")
-                ))
-                return plan(command: command, confidence: 0.80)
-            }
+        let exerciseName = groups[1].trimmingCharacters(in: .whitespaces)
+        guard let setsCount = Int(groups[2]), let reps = Int(groups[3]) else { return nil }
+        guard setsCount > 1 else { return nil }
+
+        let parsedWeight = parseWeightToken(groups[4], preferredUnit: context.preferredWeightUnit)
+        guard let parsedWeight else { return nil }
+
+        var sets: [ParsedSet] = []
+        sets.reserveCapacity(setsCount)
+        for _ in 0..<setsCount {
+            sets.append(ParsedSet(reps: reps, weight: parsedWeight.weight, unit: parsedWeight.unit))
         }
+
+        let meta = metadata(confidence: 0.93, summary: "Add \(setsCount) sets to \(exerciseName)")
+        let command = ParsedWorkoutCommand.addMultipleSets(
+            AddMultipleSetsCommand(target: .exerciseName(exerciseName), sets: sets, metadata: meta)
+        )
+        return plan(command: command, metadata: meta)
+    }
+
+    private func tryAddSingleSetPattern(normalized: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan? {
+        if let direct = parseNameRepsWeightPattern(normalized: normalized, preferredUnit: context.preferredWeightUnit) {
+            let meta = metadata(confidence: direct.confidence, summary: "Add set to \(direct.exerciseName)")
+            let command = ParsedWorkoutCommand.addSet(
+                AddSetCommand(target: .exerciseName(direct.exerciseName), set: direct.set, metadata: meta)
+            )
+            return plan(command: command, metadata: meta)
+        }
+
+        return nil
+    }
+
+    private func parseNameRepsWeightPattern(normalized: String, preferredUnit: String) -> (exerciseName: String, set: ParsedSet, confidence: Double)? {
+        let repsPattern = #"^(.+?)\s+(\d+)\s*(?:reps?|rep|repeticiones?|repeticion)\s+((?:\d+(?:[\.,]\d+)?)\s*(?:kg|lb)|peso corporal|bodyweight)(?:\s+(.+))?$"#
+        if let groups = captureGroups(pattern: repsPattern, in: normalized), groups.count >= 5 {
+            let exercise = groups[1].trimmingCharacters(in: .whitespaces)
+            guard let reps = Int(groups[2]) else { return nil }
+            guard let weight = parseWeightToken(groups[3], preferredUnit: preferredUnit) else { return nil }
+            let equipment = groups[4].isEmpty ? nil : groups[4].trimmingCharacters(in: .whitespaces)
+
+            return (
+                exerciseName: exercise,
+                set: ParsedSet(reps: reps, weight: weight.weight, unit: weight.unit, notes: equipment),
+                confidence: 0.90
+            )
+        }
+
+        let compactPattern = #"^(.+?)\s+(\d+)\s*x\s*(\d+(?:[\.,]\d+)?)(?:\s*(kg|lb))?(?:\s+(.+))?$"#
+        if let groups = captureGroups(pattern: compactPattern, in: normalized), groups.count >= 6 {
+            let exercise = groups[1].trimmingCharacters(in: .whitespaces)
+            guard let reps = Int(groups[2]) else { return nil }
+            let weightRaw = groups[3].replacingOccurrences(of: ",", with: ".")
+            guard let weight = Double(weightRaw) else { return nil }
+            let unit = groups[4].isEmpty ? preferredUnit : groups[4]
+            let equipment = groups[5].isEmpty ? nil : groups[5].trimmingCharacters(in: .whitespaces)
+
+            return (
+                exerciseName: exercise,
+                set: ParsedSet(reps: reps, weight: weight, unit: unit, notes: equipment),
+                confidence: 0.86
+            )
+        }
+
+        return nil
+    }
+
+    private func tryAddExercise(normalized: String) -> WorkoutCommandExecutionPlan? {
+        let prefixes = [
+            "anademe el", "anade el", "anade ejercicio", "anade el ejercicio", "anade ",
+            "add exercise", "add the exercise", "add "
+        ]
+
+        for prefix in prefixes {
+            guard normalized.hasPrefix(prefix) else { continue }
+            let rawName = String(normalized.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+            guard !rawName.isEmpty else { continue }
+
+            let name = rawName
+                .replacingOccurrences(of: "^el\\s+", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "^the\\s+", with: "", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces)
+
+            let meta = metadata(confidence: 0.84, summary: "Add exercise: \(name)")
+            let command = ParsedWorkoutCommand.addExercise(
+                AddExerciseCommand(name: name, target: .currentWorkout, initialSet: nil, metadata: meta)
+            )
+            return plan(command: command, metadata: meta)
+        }
+
         return nil
     }
 
     // MARK: - Extraction helpers
 
+    private func normalize(_ input: String) -> String {
+        input
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func extractWeightDelta(from text: String) -> Double? {
-        // Matches "con 10kg menos", "10kg menos", "con 10 kg menos"
-        let pattern = #"con\s+(\d+(?:\.\d+)?)\s*kg\s+menos|(\d+(?:\.\d+)?)\s*kg\s+menos"#
-        if let match = text.range(of: pattern, options: .regularExpression) {
-            let fragment = String(text[match])
-            let numPattern = #"(\d+(?:\.\d+)?)"#
-            if let numMatch = fragment.range(of: numPattern, options: .regularExpression) {
-                return -(Double(fragment[numMatch]) ?? 0)
-            }
+        let pattern = #"(?:(?:con|with)\s*)?(\d+(?:[\.,]\d+)?)\s*(kg|lb)\s*(menos|less|mas|more)"#
+        guard let groups = captureGroups(pattern: pattern, in: text), groups.count >= 4 else { return nil }
+
+        let rawNumber = groups[1].replacingOccurrences(of: ",", with: ".")
+        guard let amount = Double(rawNumber) else { return nil }
+
+        let direction = groups[3]
+        if direction == "menos" || direction == "less" {
+            return -amount
         }
-        return nil
+        return amount
     }
 
     private func extractRepsDelta(from text: String) -> Int? {
-        // Matches "elimina una repetición", "una rep menos", "one rep less"
-        if text.contains("elimina una repetición") || text.contains("una rep menos") || text.contains("one rep less") {
+        let repLessPhrases = [
+            "elimina una repeticion", "una repeticion menos", "one rep less", "one less rep", "remove one rep"
+        ]
+        if repLessPhrases.contains(where: text.contains) {
             return -1
         }
+
+        let repMorePhrases = [
+            "una repeticion mas", "one rep more", "one more rep", "add one rep"
+        ]
+        if repMorePhrases.contains(where: text.contains) {
+            return 1
+        }
+
         return nil
     }
 
-    private struct ExerciseRepsWeight {
-        var exerciseName: String
-        var reps: Int?
-        var weight: Double?
-        var unit: String?
-    }
-
-    // Basic pattern: "<name> <N> reps <W>kg" or "<name> <N>x<W>"
-    private func extractExerciseRepsWeight(from text: String) -> ExerciseRepsWeight? {
-        // Pattern: word(s) followed by number reps number kg/lb
-        let pattern = #"^(.+?)\s+(\d+)\s+reps?\s+(\d+(?:\.\d+)?)\s*(kg|lb)"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
-              match.numberOfRanges == 5
-        else { return nil }
-
-        func group(_ i: Int) -> String? {
-            guard let range = Range(match.range(at: i), in: text) else { return nil }
-            return String(text[range])
+    private func parseWeightToken(_ token: String, preferredUnit: String) -> (weight: Double, unit: String)? {
+        let normalized = token.trimmingCharacters(in: .whitespaces)
+        if normalized == "peso corporal" || normalized == "bodyweight" {
+            return (0, "bodyweight")
         }
 
-        guard let name = group(1), let repsStr = group(2), let weightStr = group(3) else { return nil }
-        return ExerciseRepsWeight(
-            exerciseName: name.trimmingCharacters(in: .whitespaces),
-            reps: Int(repsStr),
-            weight: Double(weightStr),
-            unit: group(4)
-        )
+        let pattern = #"^(\d+(?:[\.,]\d+)?)\s*(kg|lb)?$"#
+        guard let groups = captureGroups(pattern: pattern, in: normalized), groups.count >= 3 else { return nil }
+        let rawNumber = groups[1].replacingOccurrences(of: ",", with: ".")
+        guard let weight = Double(rawNumber) else { return nil }
+        let unit = groups[2].isEmpty ? preferredUnit : groups[2]
+        return (weight, unit)
+    }
+
+    private func captureGroups(pattern: String, in text: String) -> [String]? {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return nil }
+        guard let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { return nil }
+
+        var groups: [String] = []
+        for idx in 0..<match.numberOfRanges {
+            guard let range = Range(match.range(at: idx), in: text) else {
+                groups.append("")
+                continue
+            }
+            groups.append(String(text[range]))
+        }
+        return groups
     }
 
     private func buildModifierSummary(modifier: WorkoutCommandModifier, base: String) -> String {
         var parts: [String] = [base]
-        if let wd = modifier.weightDelta { parts.append("\(wd > 0 ? "+" : "")\(wd)kg") }
-        if let rd = modifier.repsDelta { parts.append("\(rd > 0 ? "+" : "")\(rd) reps") }
-        return parts.joined(separator: ", ")
+        if let weightDelta = modifier.weightDelta {
+            let sign = weightDelta > 0 ? "+" : ""
+            parts.append("\(sign)\(weightDelta)kg")
+        }
+        if let repsDelta = modifier.repsDelta {
+            let sign = repsDelta > 0 ? "+" : ""
+            parts.append("\(sign)\(repsDelta) reps")
+        }
+        return parts.joined(separator: " · ")
     }
 
     // MARK: - Factories
@@ -155,17 +257,11 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
         )
     }
 
-    private func plan(command: ParsedWorkoutCommand, confidence: Double) -> WorkoutCommandExecutionPlan {
-        let meta = ParsedCommandMetadata(
-            confidence: confidence,
-            source: .localParser,
-            needsConfirmation: false,
-            userVisibleSummary: ""
-        )
-        return WorkoutCommandExecutionPlan(
+    private func plan(command: ParsedWorkoutCommand, metadata: ParsedCommandMetadata) -> WorkoutCommandExecutionPlan {
+        WorkoutCommandExecutionPlan(
             command: command,
             validationResult: .valid,
-            metadata: meta
+            metadata: metadata
         )
     }
 
@@ -173,7 +269,12 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
         WorkoutCommandExecutionPlan(
             command: .unknown(rawText: rawText),
             validationResult: .invalid(reason: "Command not recognized"),
-            metadata: ParsedCommandMetadata(confidence: 0, source: .localParser, needsConfirmation: false, userVisibleSummary: "")
+            metadata: ParsedCommandMetadata(
+                confidence: 0,
+                source: .localParser,
+                needsConfirmation: true,
+                userVisibleSummary: "Command not recognized"
+            )
         )
     }
 }

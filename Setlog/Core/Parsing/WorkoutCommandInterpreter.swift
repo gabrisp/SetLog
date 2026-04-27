@@ -17,42 +17,56 @@ final class WorkoutCommandInterpreter {
         self.entitlementService = entitlementService
     }
 
-    func interpret(input: String, context: WorkoutCommandContext) -> WorkoutCommandExecutionPlan {
-        // 1. Try local parser first
-        let localPlan = localParser.parse(input: input, context: context)
+    func interpret(input: String, context: WorkoutCommandContext) async -> WorkoutCommandExecutionPlan {
+        // Access is intentionally enabled for all users in this slice.
+        // Keep entitlement service around so we can re-enable gating later.
+        _ = entitlementService
 
-        // 2. If local confidence is high enough, use it directly
-        if localPlan.metadata.confidence >= Self.localConfidenceThreshold {
+        // 1) Foundation Models first.
+        let fmPlan = await foundationModelsParser.parse(input: input, context: context)
+        if isHighConfidenceValid(fmPlan) {
+            return fmPlan
+        }
+
+        // 2) Local parser fallback.
+        let localPlan = await localParser.parse(input: input, context: context)
+        if case .valid = localPlan.validationResult {
             return localPlan
         }
 
-        // 3. If command is complex / low confidence, attempt Foundation Models
-        // TODO: When FM is available and user is Pro, call foundationModelsParser
-        // if entitlementService.canUse(.aiCommandParsing) {
-        //     let fmPlan = foundationModelsParser.parse(input: input, context: context)
-        //     if fmPlan.metadata.confidence >= Self.localConfidenceThreshold { return fmPlan }
-        // }
-
-        // 4. If local result is .unknown, build a confirmation request
-        if case .unknown = localPlan.command {
-            let confirmation = CommandConfirmationRequest(
-                prompt: "I didn't understand \"\(input)\". Try rephrasing or pick an action:",
-                choices: [],
-                rawText: input
-            )
-            return WorkoutCommandExecutionPlan(
-                command: .askForConfirmation(confirmation),
-                validationResult: .requiresConfirmation(request: confirmation),
-                metadata: ParsedCommandMetadata(
-                    confidence: 0,
-                    source: .fallback,
-                    needsConfirmation: true,
-                    userVisibleSummary: "Couldn't understand command"
-                )
-            )
+        // 3) If FM is valid but low-confidence, still prefer it over unknown.
+        if case .valid = fmPlan.validationResult {
+            return fmPlan
         }
 
-        // 5. Return local result even at lower confidence (needsConfirmation = true)
+        // 4) Unknown fallback confirmation request.
+        if case .unknown = localPlan.command {
+            return buildConfirmationPlan(for: input)
+        }
+
         return localPlan
+    }
+
+    private func isHighConfidenceValid(_ plan: WorkoutCommandExecutionPlan) -> Bool {
+        guard case .valid = plan.validationResult else { return false }
+        return plan.metadata.confidence >= Self.localConfidenceThreshold
+    }
+
+    private func buildConfirmationPlan(for input: String) -> WorkoutCommandExecutionPlan {
+        let confirmation = CommandConfirmationRequest(
+            prompt: "I couldn't understand \"\(input)\". Try rephrasing the command.",
+            choices: [],
+            rawText: input
+        )
+        return WorkoutCommandExecutionPlan(
+            command: .askForConfirmation(confirmation),
+            validationResult: .requiresConfirmation(request: confirmation),
+            metadata: ParsedCommandMetadata(
+                confidence: 0,
+                source: .fallback,
+                needsConfirmation: true,
+                userVisibleSummary: "Couldn't understand command"
+            )
+        )
     }
 }
