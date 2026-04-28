@@ -1,10 +1,9 @@
 import SwiftUI
 import UIKit
 
-struct TodayTopBar: UIViewRepresentable {
+struct CalendarTopBar: UIViewRepresentable {
 
-    let onCalendarTap: () -> Void
-    let onSavedExercisesTap: () -> Void
+    let onSettingsTap: () -> Void
 
     func makeUIView(context: Context) -> UIToolbar {
         let toolbar = UIToolbar()
@@ -13,29 +12,20 @@ struct TodayTopBar: UIViewRepresentable {
         toolbar.backgroundColor = .clear
         toolbar.isTranslucent = true
 
-        let calendarItem = UIBarButtonItem(
-            image: UIImage(systemName: "calendar"),
-            style: .plain,
-            target: context.coordinator,
-            action: #selector(Coordinator.didTapCalendar)
-        )
-
         let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-
-        let savedItem = UIBarButtonItem(
-            image: UIImage(systemName: "dumbbell"),
+        let settingsItem = UIBarButtonItem(
+            image: UIImage(systemName: "gearshape"),
             style: .plain,
             target: context.coordinator,
-            action: #selector(Coordinator.didTapSavedExercises)
+            action: #selector(Coordinator.didTapSettings)
         )
 
-        toolbar.items = [calendarItem, spacer, savedItem]
+        toolbar.items = [spacer, settingsItem]
         return toolbar
     }
 
     func updateUIView(_ uiView: UIToolbar, context: Context) {
-        context.coordinator.onCalendarTap = onCalendarTap
-        context.coordinator.onSavedExercisesTap = onSavedExercisesTap
+        context.coordinator.onSettingsTap = onSettingsTap
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIToolbar, context: Context) -> CGSize? {
@@ -53,19 +43,16 @@ struct TodayTopBar: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCalendarTap: onCalendarTap, onSavedExercisesTap: onSavedExercisesTap)
+        Coordinator(onSettingsTap: onSettingsTap)
     }
 
     final class Coordinator: NSObject {
-        var onCalendarTap: () -> Void
-        var onSavedExercisesTap: () -> Void
+        var onSettingsTap: () -> Void
 
-        init(onCalendarTap: @escaping () -> Void, onSavedExercisesTap: @escaping () -> Void) {
-            self.onCalendarTap = onCalendarTap
-            self.onSavedExercisesTap = onSavedExercisesTap
+        init(onSettingsTap: @escaping () -> Void) {
+            self.onSettingsTap = onSettingsTap
         }
 
-        @objc func didTapCalendar() { onCalendarTap() }
-        @objc func didTapSavedExercises() { onSavedExercisesTap() }
+        @objc func didTapSettings() { onSettingsTap() }
     }
 }

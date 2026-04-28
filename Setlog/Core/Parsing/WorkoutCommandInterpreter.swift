@@ -5,21 +5,46 @@ final class WorkoutCommandInterpreter {
     private let localParser: LocalWorkoutCommandParser
     private let foundationModelsParser: FoundationModelsWorkoutCommandParser
     private let entitlementService: EntitlementServiceProtocol
+    let resolutionCache: CommandResolutionCache
     private static let afmPreferredConfidence: Double = 0.9
 
     init(
         localParser: LocalWorkoutCommandParser = LocalWorkoutCommandParser(),
-        entitlementService: EntitlementServiceProtocol
+        entitlementService: EntitlementServiceProtocol,
+        resolutionCache: CommandResolutionCache
     ) {
         self.localParser = localParser
         self.foundationModelsParser = FoundationModelsWorkoutCommandParser(entitlementService: entitlementService)
         self.entitlementService = entitlementService
+        self.resolutionCache = resolutionCache
     }
 
     func interpret(input: String, context: WorkoutCommandContext) async -> WorkoutCommandExecutionPlan {
-        // Access is intentionally enabled for all users in this slice.
-        // Keep entitlement service around so we can re-enable gating later.
         _ = entitlementService
+
+        // 0) Check learned resolutions — if this input was clarified before, resolve instantly.
+        if let learned = await resolutionCache.resolve(input: input) {
+            let meta = ParsedCommandMetadata(
+                confidence: 0.99,
+                source: .localParser,
+                needsConfirmation: false,
+                userVisibleSummary: "Add set to \(learned.resolvedExerciseName)"
+            )
+            let target = WorkoutCommandTarget.exerciseName(learned.resolvedExerciseName)
+            let command: ParsedWorkoutCommand
+            switch learned.resolvedIntent {
+            case "add_exercise":
+                command = .addExercise(AddExerciseCommand(name: learned.resolvedExerciseName, target: .currentWorkout, initialSet: nil, metadata: meta))
+            case "add_multiple_sets":
+                let set = ParsedSet(reps: nil, weight: nil, unit: context.preferredWeightUnit)
+                command = .addMultipleSets(AddMultipleSetsCommand(target: target, sets: [set, set], metadata: meta))
+            default:
+                let set = ParsedSet(reps: nil, weight: nil, unit: context.preferredWeightUnit)
+                command = .addSet(AddSetCommand(target: target, set: set, metadata: meta))
+            }
+            await resolutionCache.incrementUseCount(id: learned.id)
+            return WorkoutCommandExecutionPlan(command: command, validationResult: .valid, metadata: meta)
+        }
 
         // 1) Foundation Models first, but we also parse locally and arbitrate.
         let fmPlan = await foundationModelsParser.parse(input: input, context: context)

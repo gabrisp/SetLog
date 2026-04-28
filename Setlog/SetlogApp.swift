@@ -5,6 +5,10 @@ struct SetlogApp: App {
 
     @State private var environment = AppEnvironment()
 
+    init() {
+        print("[BOOT] SetlogApp init")
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView(userPreferencesService: environment.userPreferencesService)

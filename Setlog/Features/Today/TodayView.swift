@@ -14,94 +14,36 @@ struct TodayView: View {
     var body: some View {
         @Bindable var viewModel = viewModel
 
-        ZStack(alignment: .bottom) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Text(viewModel.dayKey)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.top, 8)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(viewModel.dayKey)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 8)
 
-                    if viewModel.sessionSections.isEmpty {
-                        EmptyStateView(
-                            systemImage: "figure.strengthtraining.traditional",
-                            title: "Log your first set",
-                            subtitle: "Type a command below to add your first exercise."
-                        )
-                        .padding(.top, 32)
-                    } else {
-                        ForEach(viewModel.sessionSections) { sessionSection in
-                            VStack(alignment: .leading, spacing: 10) {
-                                HStack {
-                                    Text(sessionSection.session.title)
-                                        .font(.headline)
-
-                                    Spacer()
-
-                                    Text(sessionSection.session.type.capitalized)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-
-                                if sessionSection.exercises.isEmpty {
-                                    Text("No exercises yet")
-                                        .font(.footnote)
-                                        .foregroundStyle(.secondary)
-                                } else {
-                                    ForEach(sessionSection.exercises) { exerciseSection in
-                                        VStack(alignment: .leading, spacing: 8) {
-                                            Button {
-                                                viewModel.tapExercise(id: exerciseSection.exercise.id)
-                                            } label: {
-                                                HStack(spacing: 8) {
-                                                    Text(exerciseSection.exercise.name)
-                                                        .font(.subheadline.weight(.semibold))
-
-                                                    if let equipment = exerciseSection.exercise.equipment,
-                                                       !equipment.isEmpty {
-                                                        Text(equipment)
-                                                            .font(.caption)
-                                                            .foregroundStyle(.secondary)
-                                                    }
-                                                }
-                                                .frame(maxWidth: .infinity, alignment: .leading)
-                                            }
-                                            .buttonStyle(.plain)
-
-                                            if exerciseSection.sets.isEmpty {
-                                                Text("No sets yet")
-                                                    .font(.footnote)
-                                                    .foregroundStyle(.secondary)
-                                            } else {
-                                                Text(exerciseSection.sets.map(setSummary).joined(separator: " · "))
-                                                    .font(.caption)
-                                                    .foregroundStyle(.secondary)
-
-                                                ForEach(Array(exerciseSection.sets.enumerated()), id: \.element.id) { index, set in
-                                                    ExerciseSetRow(
-                                                        setNumber: index + 1,
-                                                        reps: Int(set.reps),
-                                                        weight: set.weight,
-                                                        unit: set.unit,
-                                                        onTap: { viewModel.tapSet(id: set.id) }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                        .padding(12)
-                                        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
-                                    }
-                                }
-                            }
-                            .padding(12)
-                            .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
-                        }
+                if viewModel.sessionSections.isEmpty {
+                    EmptyStateView(
+                        systemImage: "figure.strengthtraining.traditional",
+                        title: "Log your first set",
+                        subtitle: "Type a command below to add your first exercise."
+                    )
+                    .padding(.top, 32)
+                } else {
+                    ForEach(viewModel.sessionSections) { sessionSection in
+                        sessionCard(sessionSection, viewModel: viewModel)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 170)
             }
-
+            .padding(.horizontal, 16)
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .safeAreaBar(edge: .top, spacing: 0) {
+            TodayTopBar(
+                onCalendarTap: viewModel.openCalendar,
+                onSavedExercisesTap: viewModel.openSavedExercises
+            )
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if viewModel.isProcessingCommand,
                    let processingMessage = viewModel.processingMessage {
@@ -127,7 +69,6 @@ struct TodayView: View {
                         .padding(.bottom, 8)
                 }
 
-                Divider()
                 BottomCommandInputBar(
                     text: $viewModel.commandInputText,
                     isProcessing: viewModel.isProcessingCommand,
@@ -135,24 +76,10 @@ struct TodayView: View {
                     onPlusTap: viewModel.openAddWorkoutOrExerciseSheet
                 )
             }
-            .background(.bar)
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button(action: viewModel.openCalendar) {
-                    Image(systemName: "calendar")
-                }
-            }
-
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(action: viewModel.openSavedExercises) {
-                    Image(systemName: "dumbbell")
-                }
-            }
-        }
-        .navigationTitle("Today")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            print("[TODAY] appear dayKey=\(viewModel.dayKey) sections=\(viewModel.sessionSections.count)")
             viewModel.wireRouter(router)
             viewModel.wireDependencies(
                 workoutRepository: environment.workoutRepository,
@@ -173,6 +100,73 @@ struct TodayView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+    }
+
+    private func sessionCard(_ sessionSection: TodayViewModel.SessionSection, viewModel: TodayViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(sessionSection.session.title)
+                    .font(.headline)
+                Spacer()
+                Text(sessionSection.session.type.capitalized)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if sessionSection.exercises.isEmpty {
+                Text("No exercises yet")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(sessionSection.exercises) { exerciseSection in
+                    exerciseCard(exerciseSection, viewModel: viewModel)
+                }
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func exerciseCard(_ exerciseSection: TodayViewModel.ExerciseSection, viewModel: TodayViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                viewModel.tapExercise(id: exerciseSection.exercise.id)
+            } label: {
+                HStack(spacing: 8) {
+                    Text(exerciseSection.exercise.name)
+                        .font(.subheadline.weight(.semibold))
+                    if let equipment = exerciseSection.exercise.equipment,
+                       !equipment.isEmpty {
+                        Text(equipment)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+
+            if exerciseSection.sets.isEmpty {
+                Text("No sets yet")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(exerciseSection.sets.map(setSummary).joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(Array(exerciseSection.sets.enumerated()), id: \.element.id) { index, set in
+                    ExerciseSetRow(
+                        setNumber: index + 1,
+                        reps: Int(set.reps),
+                        weight: set.weight,
+                        unit: set.unit,
+                        onTap: { viewModel.tapSet(id: set.id) }
+                    )
+                }
+            }
+        }
+        .padding(12)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private func setSummary(_ set: WorkoutSetDTO) -> String {

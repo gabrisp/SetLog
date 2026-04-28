@@ -100,6 +100,15 @@
         <attribute name="success" attributeType="Boolean" defaultValueString="YES" usesScalarValueType="YES"/>
         <attribute name="workoutSessionID" optional="YES" attributeType="UUID" usesScalarValueType="NO"/>
     </entity>
+    <entity name="UserCommandResolution" representedClassName="UserCommandResolution" syncable="YES" codeGenerationType="class">
+        <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="lastUsedAt" attributeType="Date" usesScalarValueType="NO"/>
+        <attribute name="rawInput" attributeType="String" defaultValueString=""/>
+        <attribute name="resolvedExerciseName" attributeType="String" defaultValueString=""/>
+        <attribute name="resolvedIntent" attributeType="String" defaultValueString="add_set"/>
+        <attribute name="useCount" attributeType="Integer 32" defaultValueString="1" usesScalarValueType="YES"/>
+    </entity>
     <elements>
         <element name="WorkoutDay" positionX="-63" positionY="-18" width="128" height="119"/>
         <element name="WorkoutSession" positionX="80" positionY="-18" width="128" height="239"/>
@@ -109,5 +118,6 @@
         <element name="FavoriteWorkoutSnippet" positionX="80" positionY="300" width="128" height="209"/>
         <element name="RecentWorkoutSnippet" positionX="240" positionY="300" width="128" height="299"/>
         <element name="CommandHistoryItem" positionX="400" positionY="300" width="128" height="164"/>
+        <element name="UserCommandResolution" positionX="560" positionY="300" width="128" height="179"/>
     </elements>
 </model>

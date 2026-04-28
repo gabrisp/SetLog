@@ -3,10 +3,8 @@ import SwiftUI
 struct CalendarView: View {
 
     @Environment(AppRouter.self) private var router
-    @State private var viewModel = CalendarViewModel()
 
     var body: some View {
-        // TODO: Replace with full calendar grid UI
         VStack {
             Text("Calendar")
                 .font(.title2.weight(.semibold))
@@ -23,16 +21,12 @@ struct CalendarView: View {
 
             Spacer()
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    router.openSettings()
-                } label: {
-                    Image(systemName: "gearshape")
-                }
-            }
+        .safeAreaBar(edge: .top, spacing: 0) {
+            CalendarTopBar(
+                onSettingsTap: { router.openSettings() }
+            )
+            .frame(height: 44)
         }
-        .navigationTitle("Calendar")
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
     }
 }

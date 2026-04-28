@@ -42,12 +42,13 @@ final class TodayViewModel {
     var clarificationCustomText: String = ""
 
     let processingMessages: [String] = [
-        "Thinking...",
-        "Analyzing command...",
-        "Reading workout context...",
-        "Finding exercise...",
-        "Updating workout...",
-        "Saving set..."
+        "Analizando comando...",
+        "Entendiendo el ejercicio...",
+        "Buscando en el contexto...",
+        "Interpretando series y peso...",
+        "Procesando comando...",
+        "Guardando en el entrenamiento...",
+        "Casi listo...",
     ]
 
     private var router: AppRouter
@@ -57,6 +58,8 @@ final class TodayViewModel {
     private var commandInterpreter: WorkoutCommandInterpreter?
 
     private var processingMessageTask: Task<Void, Never>?
+    private var processingCommandTask: Task<Void, Never>?
+    private var pendingCancelInputText: String = ""
 
     init(dayKey: String, router: AppRouter) {
         self.dayKey = dayKey
@@ -84,6 +87,7 @@ final class TodayViewModel {
 
     func onAppear() {
         load()
+        Task { await commandInterpreter?.resolutionCache.load() }
     }
 
     func load() {
@@ -110,11 +114,25 @@ final class TodayViewModel {
 
     func submitCommand() {
         let trimmed = commandInputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isProcessingCommand else { return }
-
-        Task {
+        guard !trimmed.isEmpty, !isProcessingCommand else {
+            // If already processing, tapping submit acts as cancel
+            if isProcessingCommand { cancelCurrentCommand() }
+            return
+        }
+        pendingCancelInputText = trimmed
+        processingCommandTask = Task {
             await submitCommandInternal(rawText: trimmed)
         }
+    }
+
+    func cancelCurrentCommand() {
+        processingCommandTask?.cancel()
+        processingCommandTask = nil
+        stopProcessingMessages()
+        isProcessingCommand = false
+        commandErrorMessage = nil
+        // Restore the text the user typed so they can edit and retry
+        commandInputText = pendingCancelInputText
     }
 
     func chooseClarificationOption(_ choice: CommandConfirmationChoice) {
@@ -255,9 +273,14 @@ final class TodayViewModel {
             isProcessingCommand = false
         }
 
+        let currentExercises = sessionSections
+            .first(where: { $0.session.id == selectedWorkoutSessionID })
+            .map { $0.exercises.map(\.exercise) } ?? []
+
         let context = WorkoutCommandContext(
             dayKey: dayKey,
             selectedWorkoutSessionID: selectedWorkoutSessionID,
+            exercisesInCurrentSession: currentExercises,
             lastTouchedExerciseID: lastTouchedExerciseID,
             lastTouchedSetID: lastTouchedSetID,
             selectedExerciseID: lastTouchedExerciseID,
@@ -697,6 +720,10 @@ final class TodayViewModel {
             clarificationCustomText = ""
             commandInputText = ""
             executionSucceeded = true
+
+            // Learn the resolution so next time this input is recognized directly
+            await learnResolution(from: choice.command, originalInput: clarificationRawText)
+
             await saveRecentSnippetIfNeeded(summary)
             await loadSections()
         } catch {
@@ -704,6 +731,24 @@ final class TodayViewModel {
         }
 
         await saveCommandHistory(rawText: clarificationRawText, command: choice.command, success: executionSucceeded)
+    }
+
+    private func learnResolution(from command: ParsedWorkoutCommand, originalInput: String) async {
+        guard let cache = commandInterpreter?.resolutionCache else { return }
+        switch command {
+        case .addSet(let c):
+            if case .exerciseName(let name) = c.target {
+                await cache.learn(rawInput: originalInput, resolvedExerciseName: name, resolvedIntent: "add_set")
+            }
+        case .addMultipleSets(let c):
+            if case .exerciseName(let name) = c.target {
+                await cache.learn(rawInput: originalInput, resolvedExerciseName: name, resolvedIntent: "add_multiple_sets")
+            }
+        case .addExercise(let c):
+            await cache.learn(rawInput: originalInput, resolvedExerciseName: c.name, resolvedIntent: "add_exercise")
+        default:
+            break
+        }
     }
 
     private func saveRecentSnippetIfNeeded(_ summary: String) async {

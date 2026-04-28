@@ -22,5 +22,6 @@ struct SavedExercisesFlowView: View {
                     }
                 }
         }
+        .enableNavigationBackSwipeGesture()
     }
 }

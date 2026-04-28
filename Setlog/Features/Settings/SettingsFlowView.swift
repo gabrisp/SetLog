@@ -24,5 +24,6 @@ struct SettingsFlowView: View {
                     }
                 }
         }
+        .enableNavigationBackSwipeGesture()
     }
 }

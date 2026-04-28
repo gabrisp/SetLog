@@ -16,10 +16,12 @@ struct MainAppFlowView: View {
                     }
                 }
         }
+        .enableNavigationBackSwipeGesture()
         .sheet(item: $router.activeSheet) { sheet in
             sheetContent(for: sheet)
         }
         .onAppear {
+            print("[MAIN_FLOW] appear hasInitialToday=\(router.hasPerformedInitialTodayRoute) pathCount=\(router.mainPath.count)")
             guard !router.hasPerformedInitialTodayRoute else { return }
             router.hasPerformedInitialTodayRoute = true
             // Push without animation so Calendar is never visible on launch
@@ -28,6 +30,7 @@ struct MainAppFlowView: View {
             withTransaction(transaction) {
                 router.openToday(dayKey: Date.todayDayKey)
             }
+            print("[MAIN_FLOW] opened today dayKey=\(Date.todayDayKey)")
         }
     }
 

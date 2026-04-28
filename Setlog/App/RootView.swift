@@ -9,6 +9,8 @@ struct RootView: View {
     }
 
     var body: some View {
+        @Bindable var viewModel = viewModel
+
         ZStack {
             switch viewModel.rootState {
             case .splash:
@@ -25,5 +27,11 @@ struct RootView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: viewModel.rootState)
+        .onAppear {
+            print("[ROOT] appear state=\(viewModel.rootState.debugName)")
+        }
+        .onChange(of: viewModel.rootState) { _, newValue in
+            print("[ROOT] state changed -> \(newValue.debugName)")
+        }
     }
 }

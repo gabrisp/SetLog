@@ -29,7 +29,13 @@ final class AppEnvironment {
         self.exerciseRepository = CoreDataExerciseRepository(context: viewContext)
         self.recentItemsRepository = CoreDataRecentItemsRepository(context: viewContext)
         self.commandHistoryRepository = CoreDataCommandHistoryRepository(context: viewContext)
-        self.commandInterpreter = WorkoutCommandInterpreter(entitlementService: entitlementService)
+
+        let resolutionRepo = CoreDataUserResolutionRepository(context: viewContext)
+        let resolutionCache = CommandResolutionCache(repository: resolutionRepo)
+        self.commandInterpreter = WorkoutCommandInterpreter(
+            entitlementService: entitlementService,
+            resolutionCache: resolutionCache
+        )
     }
 }
 

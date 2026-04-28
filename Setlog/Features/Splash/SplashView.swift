@@ -17,8 +17,12 @@ struct SplashView: View {
                 .foregroundStyle(.primary)
         }
         .onAppear {
+            print("[SPLASH] appear")
             viewModel.onFinished = onFinished
             viewModel.start()
+        }
+        .onDisappear {
+            print("[SPLASH] disappear")
         }
     }
 }

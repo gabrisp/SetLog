@@ -11,8 +11,10 @@ final class SplashViewModel {
     }
 
     func start() {
+        print("[SPLASH_VM] start displayDuration=\(displayDuration)")
         Task {
             try? await Task.sleep(for: .seconds(displayDuration))
+            print("[SPLASH_VM] timer fired -> calling onFinished")
             await MainActor.run { onFinished?() }
         }
     }

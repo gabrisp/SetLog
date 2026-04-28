@@ -3,10 +3,10 @@ import Foundation
 struct WorkoutCommandContext {
     var dayKey: String
     var selectedWorkoutSessionID: UUID?
-    // TODO: var workoutSessions: [WorkoutSessionDTO]
-    // TODO: var exercisesInCurrentSession: [ExerciseEntryDTO]
-    // TODO: var savedExercises: [SavedExerciseDTO]
-    // TODO: var recentSnippets: [RecentWorkoutSnippetDTO]
+    var workoutSessions: [WorkoutSessionDTO] = []
+    var exercisesInCurrentSession: [ExerciseEntryDTO] = []
+    var savedExercises: [SavedExerciseDTO] = []
+    var recentSnippets: [RecentWorkoutSnippetDTO] = []
     var lastTouchedExerciseID: UUID?
     var lastTouchedSetID: UUID?
     var selectedExerciseID: UUID?

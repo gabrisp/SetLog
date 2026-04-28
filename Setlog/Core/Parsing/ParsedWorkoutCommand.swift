@@ -158,4 +158,5 @@ struct CommandConfirmationRequest {
     var prompt: String
     var choices: [CommandConfirmationChoice]
     var rawText: String
+    var generatedQuestion: String? // FM-generated question shown prominently in the clarification sheet
 }
