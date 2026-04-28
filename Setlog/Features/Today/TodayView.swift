@@ -43,7 +43,7 @@ struct TodayView: View {
                 onSavedExercisesTap: viewModel.openSavedExercises
             )
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
+      /*  .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if viewModel.isProcessingCommand,
                    let processingMessage = viewModel.processingMessage {
@@ -76,8 +76,15 @@ struct TodayView: View {
                     onPlusTap: viewModel.openAddWorkoutOrExerciseSheet
                 )
             }
-        }
+        }*/
         .toolbar(.hidden, for: .navigationBar)
+        .safeAreaBar(edge: .bottom, spacing: 8, content: {
+            InputSearchSwiftUI(
+                onPlusTap: viewModel.openAddWorkoutOrExerciseSheet,
+                onSubmit: { text in viewModel.commandInputText = text; viewModel.submitCommand() }
+            )
+        })
+        .enableWideBackSwipe()
         .onAppear {
             print("[TODAY] appear dayKey=\(viewModel.dayKey) sections=\(viewModel.sessionSections.count)")
             viewModel.wireRouter(router)

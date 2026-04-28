@@ -11,6 +11,9 @@ final class AppRouter {
     // Fired once per session — prevents re-pushing Today when Calendar reappears
     var hasPerformedInitialTodayRoute: Bool = false
 
+    // Last dayKey opened in TodayView — used by Calendar forward swipe gesture
+    var lastOpenedDayKey: String? = nil
+
     // MARK: - Unified navigation
 
     func go(_ destination: AppDestination) {
@@ -31,6 +34,7 @@ final class AppRouter {
     // MARK: - Main stack
 
     func openToday(dayKey: String) {
+        lastOpenedDayKey = dayKey
         mainPath = [.today(dayKey: dayKey)]
     }
 

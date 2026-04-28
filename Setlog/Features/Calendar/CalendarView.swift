@@ -28,5 +28,9 @@ struct CalendarView: View {
             .frame(height: 44)
         }
         .toolbar(.hidden, for: .navigationBar)
+        .enableForwardSwipe {
+            guard let dayKey = router.lastOpenedDayKey else { return }
+            router.openToday(dayKey: dayKey)
+        }
     }
 }

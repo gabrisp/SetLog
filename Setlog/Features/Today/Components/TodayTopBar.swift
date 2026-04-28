@@ -21,7 +21,7 @@ struct TodayTopBar: UIViewRepresentable {
         )
 
         let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-
+        
         let savedItem = UIBarButtonItem(
             image: UIImage(systemName: "dumbbell"),
             style: .plain,
