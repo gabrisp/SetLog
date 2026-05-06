@@ -23,6 +23,7 @@
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="equipment" optional="YES" attributeType="String"/>
         <attribute name="id" attributeType="UUID" usesScalarValueType="NO"/>
+        <attribute name="isUnilateral" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="name" attributeType="String" defaultValueString=""/>
         <attribute name="normalizedName" attributeType="String" defaultValueString=""/>
         <attribute name="notes" optional="YES" attributeType="String"/>
@@ -46,11 +47,14 @@
         <attribute name="reps" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="rir" attributeType="Integer 16" defaultValueString="0" usesScalarValueType="YES"/>
         <attribute name="rpe" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
+        <attribute name="side" optional="YES" attributeType="String"/>
         <attribute name="unit" attributeType="String" defaultValueString="kg"/>
         <attribute name="updatedAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="weight" attributeType="Double" defaultValueString="0.0" usesScalarValueType="YES"/>
     </entity>
     <entity name="SavedExercise" representedClassName="SavedExercise" syncable="YES" codeGenerationType="class">
+        <attribute name="aiPrimaryMusclesText" optional="YES" attributeType="String"/>
+        <attribute name="aiSecondaryMusclesText" optional="YES" attributeType="String"/>
         <attribute name="createdAt" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="descriptionText" optional="YES" attributeType="String"/>
         <attribute name="equipment" optional="YES" attributeType="String"/>

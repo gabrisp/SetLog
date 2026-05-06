@@ -147,6 +147,18 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
             return plan(command: command, metadata: meta)
         }
 
+        if let weightOnly = parseNameSetsWeightPattern(normalized: normalized, preferredUnit: context.preferredWeightUnit) {
+            let sets = Array(
+                repeating: ParsedSet(reps: nil, weight: weightOnly.weight, unit: weightOnly.unit),
+                count: weightOnly.sets
+            )
+            let meta = metadata(confidence: 0.88, summary: "Add \(weightOnly.sets) sets to \(weightOnly.exerciseName)")
+            let command = ParsedWorkoutCommand.addMultipleSets(
+                AddMultipleSetsCommand(target: .exerciseName(weightOnly.exerciseName), sets: sets, metadata: meta)
+            )
+            return plan(command: command, metadata: meta)
+        }
+
         return nil
     }
 
@@ -216,6 +228,20 @@ final class LocalWorkoutCommandParser: WorkoutCommandParsingService {
         }
 
         return nil
+    }
+
+    private func parseNameSetsWeightPattern(normalized: String, preferredUnit: String) -> (exerciseName: String, sets: Int, weight: Double, unit: String)? {
+        let pattern = #"^(.+?)\s+(\d+)\s*(?:series|serie|sets?|set)\s+(\d+(?:[\.,]\d+)?)\s*(kg|lb)?$"#
+        guard let groups = captureGroups(pattern: pattern, in: normalized), groups.count >= 5 else { return nil }
+
+        let exercise = groups[1].trimmingCharacters(in: .whitespaces)
+        guard let sets = Int(groups[2]), sets > 0 else { return nil }
+        let weightRaw = groups[3].replacingOccurrences(of: ",", with: ".")
+        guard let weight = Double(weightRaw) else { return nil }
+        let unit = groups[4].isEmpty ? preferredUnit : groups[4]
+        guard !exercise.isEmpty else { return nil }
+
+        return (exercise, sets, max(0, weight), unit)
     }
 
     private func tryAddExercise(normalized: String) -> WorkoutCommandExecutionPlan? {

@@ -1,38 +1,75 @@
 import SwiftUI
 
 struct MainAppFlowView: View {
-
+    
     @Environment(AppRouter.self) private var router
-
+    @State private var selectedTab: CustomTab = .calendar
+    
     var body: some View {
         @Bindable var router = router
-
+        
         NavigationStack(path: $router.mainPath) {
-            CalendarView()
-                .navigationDestination(for: MainRoute.self) { route in
-                    switch route {
-                    case .today(let dayKey):
-                        TodayView(dayKey: dayKey)
-                    }
+            TabView(selection: $selectedTab) {
+                CalendarView()
+                    .toolbar(.hidden, for: .tabBar)
+                    .tag(CustomTab.calendar)
+                
+                StatsView()
+                    .toolbar(.hidden, for: .tabBar)
+                    .tag(CustomTab.stats)
+            }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                    customTabBarView
+            }
+            .scrollEdgeEffectStyle(.none, for: .bottom)
+            .navigationDestination(for: MainRoute.self) { route in
+                switch route {
+                case .today(let dayKey):
+                    TodayView(dayKey: dayKey)
+                        .enableNavigationBackSwipeGesture()
                 }
+            }
         }
         .enableNavigationBackSwipeGesture()
-        .sheet(item: $router.activeSheet) { sheet in
-            sheetContent(for: sheet)
-        }
         .onAppear {
-            print("[MAIN_FLOW] appear hasInitialToday=\(router.hasPerformedInitialTodayRoute) pathCount=\(router.mainPath.count)")
             guard !router.hasPerformedInitialTodayRoute else { return }
             router.hasPerformedInitialTodayRoute = true
-            // Push without animation so Calendar is never visible on launch
+            selectedTab = .calendar
+            
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 router.openToday(dayKey: Date.todayDayKey)
             }
-            print("[MAIN_FLOW] opened today dayKey=\(Date.todayDayKey)")
         }
+        
+        .sheet(item: $router.activeSheet) { sheet in
+            sheetContent(for: sheet)
+        }
+        .animation(.easeInOut(duration: 0.25), value: selectedTab)
     }
+    
+    private var customTabBarView: some View {
+        HStack(alignment: .bottom) {
+            /// Type 1
+            CustomTabBar(
+                size: .init(width: CGFloat(90 * 2), height: 60),
+                barTint: .gray.opacity(0.3),
+                activeTab: $selectedTab
+            ) { tab in
+                Image(systemName: tab.symbol)
+                    .font(.system(size: 20, weight: .light))
+                    .symbolVariant(.fill)
+            }
+            .setlogGlass(.regular, in: Capsule())
+        }
+        .frame(height: 60)
+        .frame(maxWidth: .infinity, alignment: .center)
+
+    }
+
+       
+    
 
     @ViewBuilder
     private func sheetContent(for sheet: AppSheet) -> some View {
@@ -49,9 +86,16 @@ struct MainAppFlowView: View {
             AddWorkoutOrExerciseView(dayKey: dayKey)
                 .environment(router)
 
-        case .editWorkout, .editExercise, .editSet:
-            // TODO: Implement edit sheets
+        case .editWorkout:
             Text("Edit (coming soon)")
+
+        case .editExercise(let id, let dayKey):
+            EditExerciseSheet(exerciseID: id, dayKey: dayKey, onSaved: {})
+                .presentationDetents([.large])
+
+        case .editSet(let id, let dayKey):
+            EditSetSheet(setID: id, dayKey: dayKey, onSaved: {})
+                .presentationDetents([.large])
 
         case .proFeatureGate(let feature):
             ProFeatureGateView(feature: feature)

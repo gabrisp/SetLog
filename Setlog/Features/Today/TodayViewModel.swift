@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 @MainActor
 @Observable
@@ -18,10 +19,48 @@ final class TodayViewModel {
         var id: UUID { session.id }
     }
 
-    struct PendingCommandClarification: Identifiable {
-        let id: UUID
-        let request: CommandConfirmationRequest
-        let originalInput: String
+    enum DeleteTarget: Identifiable {
+        case workout(WorkoutSessionDTO)
+        case exercise(ExerciseEntryDTO)
+        case set(WorkoutSetDTO)
+
+        var id: String {
+            switch self {
+            case .workout(let item): return "workout-\(item.id)"
+            case .exercise(let item): return "exercise-\(item.id)"
+            case .set(let item): return "set-\(item.id)"
+            }
+        }
+
+        var itemName: String {
+            switch self {
+            case .workout(let item):
+                return item.title.isEmpty ? "workout" : item.title
+            case .exercise(let item):
+                return item.name
+            case .set:
+                return "set"
+            }
+        }
+
+        var confirmTitle: String {
+            switch self {
+            case .workout:
+                return "Delete Workout"
+            case .exercise:
+                return "Delete Exercise"
+            case .set:
+                return "Delete Set"
+            }
+        }
+    }
+
+    private enum UndoAction {
+        case addedExercise(exerciseID: UUID)
+        case addedSets(setIDs: [UUID])
+        case removedSet(set: WorkoutSetDTO)
+        case modifiedSet(original: WorkoutSetDTO)
+        case repeatedExercise(exerciseID: UUID)
     }
 
     let dayKey: String
@@ -38,28 +77,55 @@ final class TodayViewModel {
     var processingMessage: String? = nil
     var commandErrorMessage: String? = nil
     var recentCommandSummary: String? = nil
-    var pendingCommandClarification: PendingCommandClarification? = nil
-    var clarificationCustomText: String = ""
+
+    var isEditingMode: Bool = false
+    var floatingInfoText: String? = nil
+    var floatingErrorText: String? = nil
+    var expandedWorkoutIDs: Set<UUID> = []
+    var expandedExerciseIDs: Set<UUID> = []
+    var collapsedExerciseIDs: Set<UUID> = []
+
+    var undoSecondsRemaining: Int = 0
+    var hasUndoAvailable: Bool {
+        pendingUndoAction != nil && undoSecondsRemaining > 0
+    }
+
+    var recentSnippets: [RecentWorkoutSnippetDTO] = []
+    var templateSnippets: [FavoriteWorkoutSnippetDTO] = []
+    var savedExercises: [SavedExerciseDTO] = []
+
+    var activeDeleteTarget: DeleteTarget? = nil
+
+    var showRecentsSheet: Bool = false
+    var showClarificationSheet: Bool = false
+    var clarificationIntent: String = ""
+    var clarificationTarget: String = ""
 
     let processingMessages: [String] = [
-        "Analizando comando...",
-        "Entendiendo el ejercicio...",
-        "Buscando en el contexto...",
-        "Interpretando series y peso...",
-        "Procesando comando...",
-        "Guardando en el entrenamiento...",
-        "Casi listo...",
+        "Analyzing command...",
+        "Understanding the exercise...",
+        "Checking workout context...",
+        "Reading sets and weights...",
+        "Applying command...",
+        "Saving workout changes...",
+        "Almost done...",
     ]
 
     private var router: AppRouter
     private var workoutRepository: WorkoutRepositoryProtocol?
+    private var exerciseRepository: ExerciseRepositoryProtocol?
+    private var exerciseIdentityResolver: ExerciseIdentityResolver?
+    private var commandResolutionCache: CommandResolutionCache?
     private var recentItemsRepository: RecentItemsRepositoryProtocol?
     private var commandHistoryRepository: CommandHistoryRepositoryProtocol?
-    private var commandInterpreter: WorkoutCommandInterpreter?
 
     private var processingMessageTask: Task<Void, Never>?
     private var processingCommandTask: Task<Void, Never>?
+    private var undoCountdownTask: Task<Void, Never>?
+
     private var pendingCancelInputText: String = ""
+    private var pendingUndoAction: UndoAction? = nil
+    private var pendingClarificationRawCommand: String? = nil
 
     init(dayKey: String, router: AppRouter) {
         self.dayKey = dayKey
@@ -73,26 +139,29 @@ final class TodayViewModel {
 
     func wireDependencies(
         workoutRepository: WorkoutRepositoryProtocol,
+        exerciseRepository: ExerciseRepositoryProtocol,
+        exerciseIdentityResolver: ExerciseIdentityResolver,
+        commandResolutionCache: CommandResolutionCache,
         recentItemsRepository: RecentItemsRepositoryProtocol,
-        commandHistoryRepository: CommandHistoryRepositoryProtocol,
-        commandInterpreter: WorkoutCommandInterpreter
+        commandHistoryRepository: CommandHistoryRepositoryProtocol
     ) {
         self.workoutRepository = workoutRepository
+        self.exerciseRepository = exerciseRepository
+        self.exerciseIdentityResolver = exerciseIdentityResolver
+        self.commandResolutionCache = commandResolutionCache
         self.recentItemsRepository = recentItemsRepository
         self.commandHistoryRepository = commandHistoryRepository
-        self.commandInterpreter = commandInterpreter
     }
 
     // MARK: - Lifecycle
 
     func onAppear() {
         load()
-        Task { await commandInterpreter?.resolutionCache.load() }
     }
 
     func load() {
         Task {
-            await loadSections()
+            await loadSectionsAndRecents()
         }
     }
 
@@ -110,18 +179,124 @@ final class TodayViewModel {
         router.openAddWorkoutOrExercise(dayKey: dayKey)
     }
 
+    func toggleEditMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isEditingMode.toggle()
+        }
+    }
+
+    func cancelEditMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isEditingMode = false
+        }
+    }
+
+    func confirmEditMode() {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            isEditingMode = false
+        }
+    }
+
+    // MARK: - Accordion UI state
+
+    func isWorkoutExpanded(_ id: UUID) -> Bool {
+        expandedWorkoutIDs.contains(id)
+    }
+
+    func toggleWorkoutExpanded(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if expandedWorkoutIDs.contains(id) {
+                expandedWorkoutIDs.remove(id)
+            } else {
+                expandedWorkoutIDs.insert(id)
+            }
+        }
+    }
+
+    func setWorkoutExpanded(_ id: UUID, isExpanded: Bool) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if isExpanded {
+                expandedWorkoutIDs.insert(id)
+            } else {
+                expandedWorkoutIDs.remove(id)
+            }
+        }
+    }
+
+    func isExerciseExpanded(_ id: UUID) -> Bool {
+        expandedExerciseIDs.contains(id)
+    }
+
+    func toggleExerciseExpanded(_ id: UUID) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if expandedExerciseIDs.contains(id) {
+                expandedExerciseIDs.remove(id)
+            } else {
+                expandedExerciseIDs.insert(id)
+            }
+        }
+    }
+
+    func setExerciseExpanded(_ id: UUID, isExpanded: Bool) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if isExpanded {
+                expandedExerciseIDs.insert(id)
+            } else {
+                expandedExerciseIDs.remove(id)
+            }
+        }
+    }
+
+    func isExerciseOpenByDefault(_ id: UUID) -> Bool {
+        !collapsedExerciseIDs.contains(id)
+    }
+
+    func setExerciseOpenByDefault(_ id: UUID, isOpen: Bool) {
+        withAnimation(.easeInOut(duration: 0.25)) {
+            if isOpen {
+                collapsedExerciseIDs.remove(id)
+            } else {
+                collapsedExerciseIDs.insert(id)
+            }
+        }
+    }
+
     // MARK: - Command input
 
     func submitCommand() {
         let trimmed = commandInputText.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("[AI DEBUG] submitCommand() raw='\(commandInputText)' trimmed='\(trimmed)' processing=\(isProcessingCommand)")
         guard !trimmed.isEmpty, !isProcessingCommand else {
-            // If already processing, tapping submit acts as cancel
             if isProcessingCommand { cancelCurrentCommand() }
             return
         }
+        floatingErrorText = nil
         pendingCancelInputText = trimmed
         processingCommandTask = Task {
-            await submitCommandInternal(rawText: trimmed)
+            await submitCommandInternal(rawText: trimmed, isClarificationRetry: false)
+        }
+    }
+
+    func submitClarificationAnswers() {
+        guard let raw = pendingClarificationRawCommand else { return }
+
+        let intent = clarificationIntent.trimmingCharacters(in: .whitespacesAndNewlines)
+        let target = clarificationTarget.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var extra: [String] = []
+        if !intent.isEmpty { extra.append("Intent: \(intent)") }
+        if !target.isEmpty { extra.append("Target: \(target)") }
+
+        let merged = extra.isEmpty
+            ? raw
+            : "\(raw)\nClarification:\n- \(extra.joined(separator: "\n- "))"
+
+        clarificationIntent = ""
+        clarificationTarget = ""
+        pendingClarificationRawCommand = nil
+
+        processingCommandTask = Task {
+            await submitCommandInternal(rawText: merged, isClarificationRetry: true)
         }
     }
 
@@ -131,29 +306,7 @@ final class TodayViewModel {
         stopProcessingMessages()
         isProcessingCommand = false
         commandErrorMessage = nil
-        // Restore the text the user typed so they can edit and retry
         commandInputText = pendingCancelInputText
-    }
-
-    func chooseClarificationOption(_ choice: CommandConfirmationChoice) {
-        guard !isProcessingCommand else { return }
-        Task {
-            await executeClarificationChoice(choice)
-        }
-    }
-
-    func submitClarificationCustomText() {
-        let custom = clarificationCustomText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !custom.isEmpty else { return }
-        pendingCommandClarification = nil
-        clarificationCustomText = ""
-        commandInputText = custom
-        submitCommand()
-    }
-
-    func dismissClarificationSheet() {
-        pendingCommandClarification = nil
-        clarificationCustomText = ""
     }
 
     func startProcessingMessages() {
@@ -186,19 +339,150 @@ final class TodayViewModel {
             do {
                 let session = try await workoutRepository.createWorkoutSession(dayKey: dayKey, type: "strength", title: "Workout")
                 selectedWorkoutSessionID = session.id
-                await loadSections()
+                await loadSectionsAndRecents()
             } catch {
                 commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
             }
         }
     }
 
     func tapExercise(id: UUID) {
         lastTouchedExerciseID = id
+        if isEditingMode {
+            router.openEditExercise(id: id, dayKey: dayKey)
+        }
+    }
+
+    func openExerciseEditor(id: UUID) {
+        lastTouchedExerciseID = id
+        router.openEditExercise(id: id, dayKey: dayKey)
+    }
+
+    func renameWorkoutSession(id: UUID, title: String) {
+        Task {
+            guard let workoutRepository else { return }
+            do {
+                try await workoutRepository.updateWorkoutSession(id: id, title: title)
+                await loadSectionsAndRecents()
+            } catch {
+                commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func addManualExercise(toSessionID: UUID, name: String, equipment: String?) {
+        Task {
+            guard let workoutRepository, let exerciseIdentityResolver else { return }
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+            do {
+                let eq = equipment?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let identity = try await exerciseIdentityResolver.resolve(
+                    rawInput: trimmed,
+                    hintedExerciseName: trimmed,
+                    hintedEquipment: eq
+                )
+                let entry = try await workoutRepository.addExercise(
+                    toWorkoutSessionID: toSessionID,
+                    name: identity.canonicalName,
+                    equipment: identity.equipment ?? (eq?.isEmpty == false ? eq : nil),
+                    savedExerciseID: identity.savedExerciseID,
+                    isUnilateral: false
+                )
+                try await workoutRepository.updateExercise(
+                    id: entry.id,
+                    name: nil,
+                    equipment: identity.equipment ?? (eq?.isEmpty == false ? eq : nil),
+                    notes: nil,
+                    isUnilateral: nil,
+                    primaryMusclesText: identity.primaryMusclesText,
+                    secondaryMusclesText: identity.secondaryMusclesText
+                )
+                lastTouchedExerciseID = entry.id
+                await loadSectionsAndRecents()
+            } catch {
+                commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
+            }
+        }
     }
 
     func tapSet(id: UUID) {
         lastTouchedSetID = id
+        if isEditingMode {
+            router.openEditSet(id: id, dayKey: dayKey)
+        }
+    }
+
+    func openSetEditor(id: UUID) {
+        lastTouchedSetID = id
+        router.openEditSet(id: id, dayKey: dayKey)
+    }
+
+    func requestDeleteExercise(_ exercise: ExerciseEntryDTO) {
+        activeDeleteTarget = .exercise(exercise)
+    }
+
+    func requestDeleteWorkout(_ workout: WorkoutSessionDTO) {
+        activeDeleteTarget = .workout(workout)
+    }
+
+    func requestDeleteSet(_ set: WorkoutSetDTO) {
+        activeDeleteTarget = .set(set)
+    }
+
+    func performDeleteTarget() {
+        guard let target = activeDeleteTarget else { return }
+        activeDeleteTarget = nil
+
+        switch target {
+        case .workout(let session):
+            deleteWorkoutSession(id: session.id)
+        case .exercise(let exercise):
+            deleteExercise(id: exercise.id)
+        case .set(let set):
+            deleteSet(id: set.id)
+        }
+    }
+
+    func deleteExercise(id: UUID) {
+        Task {
+            guard let workoutRepository else { return }
+            do {
+                try await workoutRepository.deleteExercise(id: id)
+                if lastTouchedExerciseID == id { lastTouchedExerciseID = nil }
+                await loadSectionsAndRecents()
+            } catch {
+                commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func deleteWorkoutSession(id: UUID) {
+        Task {
+            guard let workoutRepository else { return }
+            do {
+                try await workoutRepository.deleteWorkoutSession(id: id)
+                if selectedWorkoutSessionID == id { selectedWorkoutSessionID = nil }
+                await loadSectionsAndRecents()
+            } catch {
+                commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
+            }
+        }
     }
 
     func duplicateSet(id: UUID) {
@@ -208,9 +492,12 @@ final class TodayViewModel {
                 let duplicated = try await workoutRepository.duplicateSet(id: id, modifier: nil)
                 lastTouchedSetID = duplicated.id
                 lastTouchedExerciseID = duplicated.exerciseEntryID
-                await loadSections()
+                await loadSectionsAndRecents()
             } catch {
                 commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
             }
         }
     }
@@ -221,9 +508,12 @@ final class TodayViewModel {
             do {
                 try await workoutRepository.deleteSet(id: id)
                 lastTouchedSetID = nil
-                await loadSections()
+                await loadSectionsAndRecents()
             } catch {
                 commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
             }
         }
     }
@@ -232,12 +522,21 @@ final class TodayViewModel {
         Task {
             guard let workoutRepository else { return }
             do {
-                let set = try await workoutRepository.addSet(toExerciseEntryID: exerciseID, reps: 8, weight: 0, unit: "kg")
+                let set = try await workoutRepository.addSet(
+                    toExerciseEntryID: exerciseID,
+                    reps: 8,
+                    weight: 0,
+                    unit: "kg",
+                    side: nil
+                )
                 lastTouchedSetID = set.id
                 lastTouchedExerciseID = exerciseID
-                await loadSections()
+                await loadSectionsAndRecents()
             } catch {
                 commandErrorMessage = error.localizedDescription
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    floatingErrorText = error.localizedDescription
+                }
             }
         }
     }
@@ -249,14 +548,106 @@ final class TodayViewModel {
 
     func addRecentSnippet(snippetID: UUID) {
         _ = snippetID
-        // TODO: recentItemsRepository-based add
+        // TODO: repository-based apply recent command payload
+    }
+
+    func applyRecentSnippet(_ snippet: RecentWorkoutSnippetDTO) {
+        commandInputText = snippet.title
+        showRecentsSheet = false
+    }
+
+    func clearRecents() {
+        Task {
+            guard let recentItemsRepository else { return }
+            do {
+                try await recentItemsRepository.clearRecents()
+                recentSnippets = []
+            } catch {
+                floatingErrorText = error.localizedDescription
+            }
+        }
+    }
+
+    // MARK: - Undo
+
+    func undoLastAction() {
+        guard let pendingUndoAction, undoSecondsRemaining > 0 else { return }
+        guard let workoutRepository else { return }
+
+        undoCountdownTask?.cancel()
+        undoCountdownTask = nil
+
+        Task {
+            do {
+                try await applyUndoAction(pendingUndoAction, workoutRepository: workoutRepository)
+                self.pendingUndoAction = nil
+                self.undoSecondsRemaining = 0
+                self.floatingInfoText = "Last action reverted"
+                await loadSectionsAndRecents()
+            } catch {
+                self.floatingErrorText = error.localizedDescription
+            }
+        }
+    }
+
+    private func setUndoAction(_ action: UndoAction?) {
+        pendingUndoAction = action
+        undoCountdownTask?.cancel()
+
+        guard action != nil else {
+            undoSecondsRemaining = 0
+            return
+        }
+
+        undoSecondsRemaining = 10
+        undoCountdownTask = Task { [weak self] in
+            guard let self else { return }
+            while self.undoSecondsRemaining > 0 && !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                self.undoSecondsRemaining -= 1
+            }
+            if self.undoSecondsRemaining <= 0 {
+                self.pendingUndoAction = nil
+            }
+        }
+    }
+
+    private func applyUndoAction(_ action: UndoAction, workoutRepository: WorkoutRepositoryProtocol) async throws {
+        switch action {
+        case .addedExercise(let exerciseID):
+            try await workoutRepository.deleteExercise(id: exerciseID)
+
+        case .addedSets(let setIDs):
+            for id in setIDs {
+                try await workoutRepository.deleteSet(id: id)
+            }
+
+        case .removedSet(let set):
+            _ = try await workoutRepository.addSet(toExerciseEntryID: set.exerciseEntryID, set: set)
+
+        case .modifiedSet(let original):
+            try await workoutRepository.updateSet(
+                id: original.id,
+                reps: original.reps,
+                weight: original.weight,
+                unit: original.unit,
+                notes: original.notes,
+                side: original.side
+            )
+
+        case .repeatedExercise(let exerciseID):
+            try await workoutRepository.deleteExercise(id: exerciseID)
+        }
     }
 
     // MARK: - Internal command execution
 
-    private func submitCommandInternal(rawText: String) async {
-        guard let commandInterpreter, let workoutRepository else {
+    private func submitCommandInternal(rawText: String, isClarificationRetry: Bool) async {
+        print("[AI DEBUG] submitCommandInternal() start rawText='\(rawText)'")
+        guard let workoutRepository else {
             commandErrorMessage = "Today dependencies are not available yet."
+            print("[AI DEBUG] submitCommandInternal() ERROR: workoutRepository nil")
             return
         }
 
@@ -264,179 +655,362 @@ final class TodayViewModel {
         startProcessingMessages()
         commandErrorMessage = nil
         recentCommandSummary = nil
+        floatingErrorText = nil
 
         var executionSucceeded = false
         var summaryForHistory = ""
+        var actionForHistory: String? = nil
 
         defer {
             stopProcessingMessages()
             isProcessingCommand = false
         }
 
-        let currentExercises = sessionSections
-            .first(where: { $0.session.id == selectedWorkoutSessionID })
-            .map { $0.exercises.map(\.exercise) } ?? []
-
-        let context = WorkoutCommandContext(
-            dayKey: dayKey,
-            selectedWorkoutSessionID: selectedWorkoutSessionID,
-            exercisesInCurrentSession: currentExercises,
-            lastTouchedExerciseID: lastTouchedExerciseID,
-            lastTouchedSetID: lastTouchedSetID,
-            selectedExerciseID: lastTouchedExerciseID,
-            preferredWeightUnit: "kg"
-        )
-
-        let plan = await commandInterpreter.interpret(input: rawText, context: context)
-
-        if case .requiresConfirmation(let request) = plan.validationResult {
-            presentCommandClarification(request, originalInput: rawText)
-            await saveCommandHistory(rawText: rawText, command: plan.command, success: false)
-            return
-        }
-        if case .askForConfirmation(let request) = plan.command {
-            presentCommandClarification(request, originalInput: rawText)
-            await saveCommandHistory(rawText: rawText, command: plan.command, success: false)
-            return
-        }
-
         do {
-            summaryForHistory = try await execute(plan: plan, workoutRepository: workoutRepository)
+            let context = try await buildAIContext(workoutRepository: workoutRepository)
+            print("[AI DEBUG] context lastExercise=\(context.lastExercise ?? "nil") lastSets=\(context.lastSets.map(String.init) ?? "nil")")
+            let result = try await AICommandService.shared.interpret(command: rawText, context: context)
+            actionForHistory = result.action.rawValue
+
+            let execution = try await executeAI(result: result, workoutRepository: workoutRepository)
+            summaryForHistory = execution.summary
             executionSucceeded = true
             commandInputText = ""
             recentCommandSummary = summaryForHistory
+            withAnimation(.easeInOut(duration: 0.2)) {
+                floatingInfoText = summaryForHistory
+            }
+
+            if execution.exercisesAdded > 0 {
+                try await AIUsageService.shared.recordUsage(
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    exercisesAdded: execution.exercisesAdded
+                )
+            }
+
+            setUndoAction(execution.undoAction)
+            await learnCommandResolutionIfNeeded(rawText: rawText, result: result)
+
             await saveRecentSnippetIfNeeded(summaryForHistory)
-
-            await loadSections()
+            await loadSectionsAndRecents()
+        } catch let aiError as AIUsageError {
+            print("[AI DEBUG] submitCommandInternal() AIUsageError: \(aiError.localizedDescription)")
+            commandErrorMessage = aiError.localizedDescription
+            withAnimation(.easeInOut(duration: 0.2)) {
+                floatingErrorText = aiError.localizedDescription
+            }
         } catch {
+            print("[AI DEBUG] submitCommandInternal() CATCH: \(error.localizedDescription)")
             commandErrorMessage = error.localizedDescription
+            withAnimation(.easeInOut(duration: 0.2)) {
+                floatingErrorText = error.localizedDescription
+            }
         }
 
-        await saveCommandHistory(rawText: rawText, command: plan.command, success: executionSucceeded)
+        await saveCommandHistory(rawText: rawText, commandType: actionForHistory, success: executionSucceeded)
     }
 
-    private func execute(plan: WorkoutCommandExecutionPlan, workoutRepository: WorkoutRepositoryProtocol) async throws -> String {
-        switch plan.validationResult {
-        case .valid:
-            break
-        case .invalid(let reason):
-            throw TodayCommandError.validation(reason)
-        case .requiresConfirmation(let request):
-            throw TodayCommandError.validation(request.prompt)
-        case .requiresProFeature(let feature):
-            router.presentProGate(feature: feature)
-            throw TodayCommandError.validation("This command requires Pro")
+    private func executeAI(
+        result: WorkoutCommandResult,
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> (summary: String, exercisesAdded: Int, undoAction: UndoAction?) {
+        switch result.action {
+        case .addExercise:
+            return try await applyAddExercise(result: result, workoutRepository: workoutRepository)
+        case .addSets:
+            return try await applyAddSets(result: result, workoutRepository: workoutRepository)
+        case .removeLastSet:
+            return try await applyRemoveLastSet(workoutRepository: workoutRepository)
+        case .modifyLastSet:
+            return try await applyModifyLastSet(result: result, workoutRepository: workoutRepository)
+        case .repeatLastExercise:
+            return try await applyRepeatLastExercise(result: result, workoutRepository: workoutRepository)
+        }
+    }
+
+    private func applyAddExercise(
+        result: WorkoutCommandResult,
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> (summary: String, exercisesAdded: Int, undoAction: UndoAction?) {
+        guard let exerciseIdentityResolver else {
+            throw TodayCommandError.validation("Exercise identity resolver is not available.")
+        }
+        let session = try await resolveActiveSession(workoutRepository: workoutRepository)
+
+        guard let rawName = result.exercise?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty else {
+            throw TodayCommandError.validation("I couldn’t understand that command. Try writing it another way.")
         }
 
-        switch plan.command {
-        case .addExercise(let command):
-            let session = try await resolveActiveSession(workoutRepository: workoutRepository)
-            let parsed = splitExerciseNameAndEquipment(command.name)
-            let exercise = try await workoutRepository.addExercise(
-                toWorkoutSessionID: session.id,
-                name: parsed.name,
-                equipment: parsed.equipment,
-                savedExerciseID: nil
+        let identity = try await exerciseIdentityResolver.resolve(
+            rawInput: rawName,
+            hintedExerciseName: rawName,
+            hintedEquipment: result.equipment
+        )
+
+        let exercisesInSession = try await workoutRepository.fetchExercises(workoutSessionID: session.id)
+        if let existing = findSessionExercise(
+            exercises: exercisesInSession,
+            matchingSavedExerciseID: identity.savedExerciseID,
+            equipmentHint: result.equipment ?? identity.equipment
+        ) {
+            lastTouchedExerciseID = existing.id
+            let setResult = try await applyAddSets(
+                result: result,
+                workoutRepository: workoutRepository
             )
-            lastTouchedExerciseID = exercise.id
-            return "Added \(exercise.name)"
-
-        case .addSet(let command):
-            return try await addSet(command: command, workoutRepository: workoutRepository)
-
-        case .addMultipleSets(let command):
-            return try await addMultipleSets(command: command, workoutRepository: workoutRepository)
-
-        case .duplicateSet(let command):
-            let baseSet = try await resolveSetTarget(command.target, workoutRepository: workoutRepository)
-            let duplicated = try await workoutRepository.duplicateSet(id: baseSet.id, modifier: command.modifier)
-            lastTouchedSetID = duplicated.id
-            lastTouchedExerciseID = duplicated.exerciseEntryID
-            return command.metadata.userVisibleSummary.isEmpty ? "Duplicated set" : command.metadata.userVisibleSummary
-
-        case .deleteSet(let command):
-            let set = try await resolveSetTarget(command.target, workoutRepository: workoutRepository)
-            try await workoutRepository.deleteSet(id: set.id)
-            lastTouchedSetID = nil
-            return "Deleted last set"
-
-        case .askForConfirmation(let request):
-            throw TodayCommandError.validation(request.prompt)
-
-        case .unknown(let rawText):
-            throw TodayCommandError.validation("Could not understand command: \(rawText)")
-
-        case .updateSet, .saveExerciseAsFavorite, .saveSetAsFavorite, .addFavoriteToWorkout,
-                .addRecentToWorkout, .startWorkoutSession, .switchWorkoutSession:
-            throw TodayCommandError.validation("This command is not supported yet in Today")
+            return (
+                setResult.summary,
+                setResult.exercisesAdded,
+                setResult.undoAction
+            )
         }
+
+        let created = try await workoutRepository.addExercise(
+            toWorkoutSessionID: session.id,
+            name: identity.canonicalName,
+            equipment: result.equipment ?? identity.equipment,
+            savedExerciseID: identity.savedExerciseID,
+            isUnilateral: result.modifiers.contains("unilateral")
+        )
+
+        try await workoutRepository.updateExercise(
+            id: created.id,
+            name: nil,
+            equipment: result.equipment ?? identity.equipment,
+            notes: nil,
+            isUnilateral: nil,
+            primaryMusclesText: identity.primaryMusclesText,
+            secondaryMusclesText: identity.secondaryMusclesText
+        )
+
+        lastTouchedExerciseID = created.id
+
+        if result.sets != nil || result.reps != nil || result.weight != nil || result.weightDelta != nil {
+            let semantics = parseSetSemantics(from: result)
+            let count = max(1, result.sets ?? 1)
+            let reps = Int16(max(0, result.reps ?? 0))
+            let suggestedWeight = try await suggestedWeightForExercise(
+                normalizedName: normalize(identity.canonicalName),
+                in: session.id,
+                workoutRepository: workoutRepository
+            )
+            let baseWeight = result.weight ?? suggestedWeight ?? 0
+            let weightValue = max(0, baseWeight + (result.weightDelta ?? 0))
+            let unit = result.unit ?? "kg"
+
+            var lastCreatedSet: WorkoutSetDTO?
+            for _ in 0..<count {
+                lastCreatedSet = try await workoutRepository.addSet(
+                    toExerciseEntryID: created.id,
+                    reps: reps,
+                    weight: weightValue,
+                    unit: unit,
+                    side: semantics.side,
+                    notes: semantics.notes,
+                    isWarmup: semantics.isWarmup,
+                    isFailure: semantics.isDropset,
+                    durationSeconds: semantics.restSeconds
+                )
+            }
+            lastTouchedSetID = lastCreatedSet?.id
+        }
+
+        return ("Added \(created.name)", 1, .addedExercise(exerciseID: created.id))
     }
 
-    private func addSet(command: AddSetCommand, workoutRepository: WorkoutRepositoryProtocol) async throws -> String {
+    private func applyAddSets(
+        result: WorkoutCommandResult,
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> (summary: String, exercisesAdded: Int, undoAction: UndoAction?) {
         let session = try await resolveActiveSession(workoutRepository: workoutRepository)
-        let targetExercise = try await resolveExerciseTarget(
-            command.target,
+        let targetExercise = try await resolveTargetExercise(
+            exerciseName: result.exercise,
             sessionID: session.id,
-            fallbackEquipment: command.set.notes,
             workoutRepository: workoutRepository
         )
 
         let existingSets = try await workoutRepository.fetchSets(exerciseEntryID: targetExercise.id)
         let baseSet = existingSets.last
-        let resolvedReps = command.set.reps ?? Int(baseSet?.reps ?? 8)
-        let resolvedWeight = command.set.weight ?? baseSet?.weight ?? 0
-        let resolvedUnit = command.set.unit ?? baseSet?.unit ?? "kg"
+        let semantics = parseSetSemantics(from: result)
 
-        let reps = Int16(max(0, resolvedReps))
-        let weight = max(0, resolvedWeight)
-        let unit = resolvedUnit
+        let count = max(1, result.setsToAdd ?? result.sets ?? 1)
+        let baseWeight = result.weight ?? baseSet?.weight ?? 0
+        let resolvedWeight = max(0, baseWeight + (result.weightDelta ?? 0))
+        let reps = Int16(max(0, result.reps ?? 0))
+        let unit = result.unit ?? baseSet?.unit ?? "kg"
 
-        let set = try await workoutRepository.addSet(
-            toExerciseEntryID: targetExercise.id,
-            reps: reps,
-            weight: weight,
-            unit: unit
-        )
-
-        lastTouchedExerciseID = targetExercise.id
-        lastTouchedSetID = set.id
-
-        let weightText = unit == "bodyweight" ? "bodyweight" : "\(formatWeight(weight)) \(unit)"
-        return "Added \(targetExercise.name) · \(reps) × \(weightText)"
-    }
-
-    private func addMultipleSets(command: AddMultipleSetsCommand, workoutRepository: WorkoutRepositoryProtocol) async throws -> String {
-        let session = try await resolveActiveSession(workoutRepository: workoutRepository)
-        let targetExercise = try await resolveExerciseTarget(
-            command.target,
-            sessionID: session.id,
-            fallbackEquipment: command.sets.first?.notes,
-            workoutRepository: workoutRepository
-        )
-
-        let existingSets = try await workoutRepository.fetchSets(exerciseEntryID: targetExercise.id)
-        let baseSet = existingSets.last
-
+        var addedSetIDs: [UUID] = []
         var lastSet: WorkoutSetDTO?
-        for parsedSet in command.sets {
-            let resolvedReps = parsedSet.reps ?? Int(baseSet?.reps ?? 8)
-            let resolvedUnit = parsedSet.unit ?? baseSet?.unit ?? "kg"
-            let resolvedWeight = parsedSet.weight ?? baseSet?.weight ?? 0
-
-            let reps = Int16(max(0, resolvedReps))
-            let weight = max(0, resolvedWeight)
-            let unit = resolvedUnit
+        for _ in 0..<count {
             lastSet = try await workoutRepository.addSet(
                 toExerciseEntryID: targetExercise.id,
                 reps: reps,
-                weight: weight,
-                unit: unit
+                weight: resolvedWeight,
+                unit: unit,
+                side: semantics.side,
+                notes: semantics.notes,
+                isWarmup: semantics.isWarmup,
+                isFailure: semantics.isDropset,
+                durationSeconds: semantics.restSeconds
             )
+            if let lastSet {
+                addedSetIDs.append(lastSet.id)
+            }
         }
 
         lastTouchedExerciseID = targetExercise.id
         lastTouchedSetID = lastSet?.id
-        return "Added \(command.sets.count) sets to \(targetExercise.name)"
+
+        return (
+            "Added \(count) set\(count == 1 ? "" : "s") to \(targetExercise.name)",
+            1,
+            .addedSets(setIDs: addedSetIDs)
+        )
+    }
+
+    private func applyRemoveLastSet(
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> (summary: String, exercisesAdded: Int, undoAction: UndoAction?) {
+        let set = try await resolveTargetSet(workoutRepository: workoutRepository)
+        try await workoutRepository.deleteSet(id: set.id)
+        lastTouchedSetID = nil
+        return ("Deleted last set", 0, .removedSet(set: set))
+    }
+
+    private func applyModifyLastSet(
+        result: WorkoutCommandResult,
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> (summary: String, exercisesAdded: Int, undoAction: UndoAction?) {
+        let set = try await resolveTargetSet(workoutRepository: workoutRepository)
+
+        let updatedReps: Int16?
+        if let reps = result.reps {
+            updatedReps = Int16(max(0, reps))
+        } else {
+            updatedReps = nil
+        }
+
+        let updatedWeight: Double?
+        if let weight = result.weight {
+            updatedWeight = max(0, weight)
+        } else if let delta = result.weightDelta {
+            updatedWeight = max(0, set.weight + delta)
+        } else {
+            updatedWeight = nil
+        }
+
+        let semantics = parseSetSemantics(from: result)
+
+        try await workoutRepository.updateSet(
+            id: set.id,
+            reps: updatedReps,
+            weight: updatedWeight,
+            unit: result.unit,
+            notes: semantics.notes,
+            side: semantics.side,
+            isWarmup: semantics.isWarmup ? true : nil,
+            isFailure: semantics.isDropset ? true : nil,
+            durationSeconds: semantics.restSeconds
+        )
+
+        return ("Updated last set", 0, .modifiedSet(original: set))
+    }
+
+    private func applyRepeatLastExercise(
+        result: WorkoutCommandResult,
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> (summary: String, exercisesAdded: Int, undoAction: UndoAction?) {
+        guard let exerciseIdentityResolver else {
+            throw TodayCommandError.validation("Exercise identity resolver is not available.")
+        }
+        let session = try await resolveActiveSession(workoutRepository: workoutRepository)
+        let sourceExercise = try await resolveTargetExercise(
+            exerciseName: result.exercise,
+            sessionID: session.id,
+            workoutRepository: workoutRepository
+        )
+
+        let sourceSavedExerciseID: UUID
+        if let existing = sourceExercise.savedExerciseID {
+            sourceSavedExerciseID = existing
+        } else {
+            let identity = try await exerciseIdentityResolver.resolve(
+                rawInput: sourceExercise.name,
+                hintedExerciseName: sourceExercise.name,
+                hintedEquipment: sourceExercise.equipment,
+                aiPrimaryMusclesText: sourceExercise.primaryMusclesText,
+                aiSecondaryMusclesText: sourceExercise.secondaryMusclesText
+            )
+            sourceSavedExerciseID = identity.savedExerciseID
+        }
+
+        let repeatedExercise = try await workoutRepository.addExercise(
+            toWorkoutSessionID: session.id,
+            name: sourceExercise.name,
+            equipment: sourceExercise.equipment,
+            savedExerciseID: sourceSavedExerciseID,
+            isUnilateral: sourceExercise.isUnilateral
+        )
+
+        lastTouchedExerciseID = repeatedExercise.id
+
+        let sourceSets = try await workoutRepository.fetchSets(exerciseEntryID: sourceExercise.id)
+        let template = sourceSets.last
+        let semantics = parseSetSemantics(from: result)
+        if template != nil || result.reps != nil || result.weight != nil || result.weightDelta != nil {
+            let reps = Int16(max(0, result.reps ?? 0))
+            let startingWeight = result.weight ?? template?.weight ?? 0
+            let weight = max(0, startingWeight + (result.weightDelta ?? 0))
+            let unit = result.unit ?? template?.unit ?? "kg"
+            let set = try await workoutRepository.addSet(
+                toExerciseEntryID: repeatedExercise.id,
+                reps: reps,
+                weight: weight,
+                unit: unit,
+                side: semantics.side ?? template?.side,
+                notes: semantics.notes ?? template?.notes,
+                isWarmup: semantics.isWarmup || (template?.isWarmup ?? false),
+                isFailure: semantics.isDropset || (template?.isFailure ?? false),
+                durationSeconds: semantics.restSeconds ?? template?.durationSeconds
+            )
+            lastTouchedSetID = set.id
+        }
+
+        return ("Repeated \(sourceExercise.name)", 1, .repeatedExercise(exerciseID: repeatedExercise.id))
+    }
+
+    private func buildAIContext(workoutRepository: WorkoutRepositoryProtocol) async throws -> WorkoutSessionContext {
+        let session = try await resolveActiveSession(workoutRepository: workoutRepository)
+        let exercises = try await workoutRepository.fetchExercises(workoutSessionID: session.id)
+
+        let targetExercise: ExerciseEntryDTO?
+        if let lastTouchedExerciseID {
+            targetExercise = exercises.first(where: { $0.id == lastTouchedExerciseID })
+        } else {
+            targetExercise = exercises.last
+        }
+
+        var lastWeight: Double?
+        var lastReps: Int?
+        var lastSets: Int?
+
+        if let targetExercise {
+            let sets = try await workoutRepository.fetchSets(exerciseEntryID: targetExercise.id)
+            if let lastSet = sets.last {
+                lastWeight = lastSet.weight
+                lastReps = Int(lastSet.reps)
+            }
+            lastSets = sets.count
+        }
+
+        return WorkoutSessionContext(
+            lastExercise: targetExercise?.name,
+            lastWeight: lastWeight,
+            lastReps: lastReps,
+            lastSets: lastSets,
+            lastEquipment: targetExercise?.equipment
+        )
     }
 
     private func resolveActiveSession(workoutRepository: WorkoutRepositoryProtocol) async throws -> WorkoutSessionDTO {
@@ -445,6 +1019,11 @@ final class TodayViewModel {
         if let selectedWorkoutSessionID,
            let selected = sessions.first(where: { $0.id == selectedWorkoutSessionID }) {
             return selected
+        }
+
+        if let strength = sessions.last(where: { $0.type.lowercased() == "strength" }) {
+            selectedWorkoutSessionID = strength.id
+            return strength
         }
 
         if let latest = sessions.last {
@@ -457,98 +1036,55 @@ final class TodayViewModel {
         return created
     }
 
-    private func resolveExerciseTarget(
-        _ target: WorkoutCommandTarget,
+    private func resolveTargetExercise(
+        exerciseName: String?,
         sessionID: UUID,
-        fallbackEquipment: String?,
         workoutRepository: WorkoutRepositoryProtocol
     ) async throws -> ExerciseEntryDTO {
-        switch target {
-        case .exercise(let id):
-            if let match = try await findExercise(by: id, workoutRepository: workoutRepository) {
-                return match
-            }
-
-        case .exerciseName(let name):
+        if let rawName = exerciseName?.trimmingCharacters(in: .whitespacesAndNewlines), !rawName.isEmpty {
             return try await findOrCreateExercise(
-                name: name,
-                equipment: fallbackEquipment,
+                name: rawName,
+                equipment: nil,
                 sessionID: sessionID,
                 workoutRepository: workoutRepository
             )
-
-        case .lastTouchedExercise, .selectedExercise:
-            if let lastTouchedExerciseID,
-               let match = try await findExercise(by: lastTouchedExerciseID, workoutRepository: workoutRepository) {
-                return match
-            }
-
-        case .previousExercise:
-            if let lastTouchedExerciseID,
-               let match = try await findExercise(by: lastTouchedExerciseID, workoutRepository: workoutRepository) {
-                return match
-            }
-            let exercises = try await workoutRepository.fetchExercises(workoutSessionID: sessionID)
-            if let last = exercises.last { return last }
-
-        case .currentWorkout:
-            let exercises = try await workoutRepository.fetchExercises(workoutSessionID: sessionID)
-            if let last = exercises.last { return last }
-
-        default:
-            break
         }
 
-        throw TodayCommandError.validation("Could not resolve exercise target")
+        if let lastTouchedExerciseID,
+           let exercise = try await findExercise(by: lastTouchedExerciseID, workoutRepository: workoutRepository) {
+            return exercise
+        }
+
+        let exercises = try await workoutRepository.fetchExercises(workoutSessionID: sessionID)
+        if let last = exercises.last {
+            return last
+        }
+
+        throw TodayCommandError.validation("I couldn’t understand that command. Try writing it another way.")
     }
 
-    private func resolveSetTarget(_ target: WorkoutCommandTarget, workoutRepository: WorkoutRepositoryProtocol) async throws -> WorkoutSetDTO {
-        switch target {
-        case .lastTouchedSet:
-            if let lastTouchedSetID,
-               let set = try await findSet(by: lastTouchedSetID, workoutRepository: workoutRepository) {
-                return set
-            }
-
-        case .selectedExercise, .previousExercise, .lastTouchedExercise:
-            let session = try await resolveActiveSession(workoutRepository: workoutRepository)
-            let exercise = try await resolveExerciseTarget(
-                target,
-                sessionID: session.id,
-                fallbackEquipment: nil,
-                workoutRepository: workoutRepository
-            )
-            let sets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
-            if let last = sets.last { return last }
-
-        case .exercise(let exerciseID):
-            let sets = try await workoutRepository.fetchSets(exerciseEntryID: exerciseID)
-            if let last = sets.last { return last }
-
-        case .exerciseName(let name):
-            let session = try await resolveActiveSession(workoutRepository: workoutRepository)
-            let exercise = try await findOrCreateExercise(
-                name: name,
-                equipment: nil,
-                sessionID: session.id,
-                workoutRepository: workoutRepository
-            )
-            let sets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
-            if let last = sets.last { return last }
-
-        default:
-            break
+    private func resolveTargetSet(workoutRepository: WorkoutRepositoryProtocol) async throws -> WorkoutSetDTO {
+        if let lastTouchedSetID,
+           let set = try await findSet(by: lastTouchedSetID, workoutRepository: workoutRepository) {
+            return set
         }
 
-        // final fallback: latest set in selected session
+        if let lastTouchedExerciseID,
+           let exercise = try await findExercise(by: lastTouchedExerciseID, workoutRepository: workoutRepository) {
+            let sets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
+            if let last = sets.last { return last }
+        }
+
         let session = try await resolveActiveSession(workoutRepository: workoutRepository)
         let exercises = try await workoutRepository.fetchExercises(workoutSessionID: session.id)
         for exercise in exercises.reversed() {
             let sets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
-            if let set = sets.last { return set }
+            if let set = sets.last {
+                return set
+            }
         }
 
-        throw TodayCommandError.validation("No set available to update")
+        throw TodayCommandError.validation("I couldn’t understand that command. Try writing it another way.")
     }
 
     private func findOrCreateExercise(
@@ -557,18 +1093,43 @@ final class TodayViewModel {
         sessionID: UUID,
         workoutRepository: WorkoutRepositoryProtocol
     ) async throws -> ExerciseEntryDTO {
-        let normalized = normalize(name)
+        guard let exerciseIdentityResolver else {
+            throw TodayCommandError.validation("Exercise identity resolver is not available.")
+        }
+        let identity = try await exerciseIdentityResolver.resolve(
+            rawInput: name,
+            hintedExerciseName: name,
+            hintedEquipment: equipment
+        )
+
         let exercises = try await workoutRepository.fetchExercises(workoutSessionID: sessionID)
-        if let existing = exercises.first(where: { $0.normalizedName == normalized }) {
+        if let existing = findSessionExercise(
+            exercises: exercises,
+            matchingSavedExerciseID: identity.savedExerciseID,
+            equipmentHint: equipment ?? identity.equipment
+        ) {
             return existing
         }
 
-        return try await workoutRepository.addExercise(
+        let created = try await workoutRepository.addExercise(
             toWorkoutSessionID: sessionID,
-            name: name,
-            equipment: equipment,
-            savedExerciseID: nil
+            name: identity.canonicalName,
+            equipment: equipment ?? identity.equipment,
+            savedExerciseID: identity.savedExerciseID,
+            isUnilateral: false
         )
+
+        try await workoutRepository.updateExercise(
+            id: created.id,
+            name: nil,
+            equipment: equipment ?? identity.equipment,
+            notes: nil,
+            isUnilateral: nil,
+            primaryMusclesText: identity.primaryMusclesText,
+            secondaryMusclesText: identity.secondaryMusclesText
+        )
+
+        return created
     }
 
     private func findExercise(by id: UUID, workoutRepository: WorkoutRepositoryProtocol) async throws -> ExerciseEntryDTO? {
@@ -596,11 +1157,71 @@ final class TodayViewModel {
         return nil
     }
 
+    private func normalize(_ text: String) -> String {
+        text
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+    }
+
+    private func findSessionExercise(
+        exercises: [ExerciseEntryDTO],
+        matchingSavedExerciseID savedExerciseID: UUID,
+        equipmentHint: String?
+    ) -> ExerciseEntryDTO? {
+        let matches = exercises.filter { $0.savedExerciseID == savedExerciseID }
+        guard !matches.isEmpty else { return nil }
+
+        guard let equipmentHint, !equipmentHint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return matches.last
+        }
+
+        let normalizedHint = normalize(equipmentHint)
+        if let byEquipment = matches.last(where: { normalize($0.equipment ?? "") == normalizedHint }) {
+            return byEquipment
+        }
+
+        return matches.last
+    }
+
+    private func suggestedWeightForExercise(
+        normalizedName: String,
+        in sessionID: UUID,
+        workoutRepository: WorkoutRepositoryProtocol
+    ) async throws -> Double? {
+        let exercises = try await workoutRepository.fetchExercises(workoutSessionID: sessionID)
+        let matching = exercises.filter { $0.normalizedName == normalizedName }
+        guard !matching.isEmpty else { return nil }
+
+        var latestSet: WorkoutSetDTO?
+        for exercise in matching {
+            let sets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
+            guard let last = sets.sorted(by: { $0.orderIndex < $1.orderIndex }).last else { continue }
+            if latestSet == nil || last.updatedAt > latestSet!.updatedAt {
+                latestSet = last
+            }
+        }
+
+        return latestSet?.weight
+    }
+
+    private func loadSectionsAndRecents() async {
+        await loadSections()
+        await loadRecents()
+        await loadQuickAccessLibrary()
+    }
+
     private func loadSections() async {
         guard let workoutRepository else { return }
 
         do {
-            let sessions = try await workoutRepository.fetchWorkoutSessions(dayKey: dayKey)
+            let fetchedSessions = try await workoutRepository.fetchWorkoutSessions(dayKey: dayKey)
+            let sessions = fetchedSessions.sorted {
+                if $0.orderIndex == $1.orderIndex {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.orderIndex < $1.orderIndex
+            }
 
             if selectedWorkoutSessionID == nil {
                 selectedWorkoutSessionID = sessions.last?.id
@@ -611,143 +1232,224 @@ final class TodayViewModel {
 
             var newSections: [SessionSection] = []
             for session in sessions {
-                let exercises = try await workoutRepository.fetchExercises(workoutSessionID: session.id)
+                let fetchedExercises = try await workoutRepository.fetchExercises(workoutSessionID: session.id)
+                let exercises = fetchedExercises.sorted {
+                    if $0.orderIndex == $1.orderIndex {
+                        return $0.createdAt < $1.createdAt
+                    }
+                    return $0.orderIndex < $1.orderIndex
+                }
                 var exerciseSections: [ExerciseSection] = []
 
                 for exercise in exercises {
-                    let sets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
+                    let fetchedSets = try await workoutRepository.fetchSets(exerciseEntryID: exercise.id)
+                    let sets = fetchedSets.sorted {
+                        if $0.orderIndex == $1.orderIndex {
+                            return $0.createdAt < $1.createdAt
+                        }
+                        return $0.orderIndex < $1.orderIndex
+                    }
                     exerciseSections.append(ExerciseSection(exercise: exercise, sets: sets))
                 }
 
                 newSections.append(SessionSection(session: session, exercises: exerciseSections))
             }
 
-            sessionSections = newSections
-        } catch {
-            commandErrorMessage = error.localizedDescription
-        }
-    }
+            withAnimation(.easeInOut(duration: 0.2)) {
+                sessionSections = newSections
+                let validWorkoutIDs = Set(newSections.map { $0.session.id })
+                expandedWorkoutIDs = expandedWorkoutIDs.intersection(validWorkoutIDs)
 
-    private func commandTypeName(for command: ParsedWorkoutCommand) -> String {
-        switch command {
-        case .addExercise: return "addExercise"
-        case .addSet: return "addSet"
-        case .addMultipleSets: return "addMultipleSets"
-        case .duplicateSet: return "duplicateSet"
-        case .updateSet: return "updateSet"
-        case .deleteSet: return "deleteSet"
-        case .saveExerciseAsFavorite: return "saveExerciseAsFavorite"
-        case .saveSetAsFavorite: return "saveSetAsFavorite"
-        case .addFavoriteToWorkout: return "addFavoriteToWorkout"
-        case .addRecentToWorkout: return "addRecentToWorkout"
-        case .startWorkoutSession: return "startWorkoutSession"
-        case .switchWorkoutSession: return "switchWorkoutSession"
-        case .askForConfirmation: return "askForConfirmation"
-        case .unknown: return "unknown"
-        }
-    }
+                let validExerciseIDs = Set(
+                    newSections.flatMap { $0.exercises.map(\.exercise.id) }
+                )
+                expandedExerciseIDs = expandedExerciseIDs.intersection(validExerciseIDs)
+                collapsedExerciseIDs = collapsedExerciseIDs.intersection(validExerciseIDs)
 
-    private func normalize(_ text: String) -> String {
-        text
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
-    }
-
-    private func formatWeight(_ value: Double) -> String {
-        if value.rounded() == value {
-            return String(Int(value))
-        }
-        return String(format: "%.1f", value)
-    }
-
-    private func splitExerciseNameAndEquipment(_ raw: String) -> (name: String, equipment: String?) {
-        let normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let separators = [" en ", " with ", " in "]
-
-        for separator in separators {
-            if let range = normalized.range(of: separator, options: .caseInsensitive) {
-                let name = String(normalized[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-                let equipment = String(normalized[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !name.isEmpty, !equipment.isEmpty {
-                    return (name, equipment)
+                if expandedWorkoutIDs.isEmpty, let firstSession = newSections.first?.session.id {
+                    expandedWorkoutIDs.insert(firstSession)
                 }
             }
-        }
-
-        return (normalized, nil)
-    }
-
-    private func presentCommandClarification(_ request: CommandConfirmationRequest, originalInput: String) {
-        pendingCommandClarification = PendingCommandClarification(
-            id: UUID(),
-            request: request,
-            originalInput: originalInput
-        )
-        clarificationCustomText = originalInput
-        commandErrorMessage = nil
-    }
-
-    private func executeClarificationChoice(_ choice: CommandConfirmationChoice) async {
-        guard let workoutRepository else {
-            commandErrorMessage = "Today dependencies are not available yet."
-            return
-        }
-        let clarificationRawText = pendingCommandClarification?.originalInput ?? choice.label
-        pendingCommandClarification = nil
-
-        isProcessingCommand = true
-        startProcessingMessages()
-        commandErrorMessage = nil
-        recentCommandSummary = nil
-
-        var executionSucceeded = false
-        defer {
-            stopProcessingMessages()
-            isProcessingCommand = false
-        }
-
-        let plan = WorkoutCommandExecutionPlan(
-            command: choice.command,
-            validationResult: .valid,
-            metadata: metadata(for: choice.command)
-        )
-
-        do {
-            let summary = try await execute(plan: plan, workoutRepository: workoutRepository)
-            recentCommandSummary = summary
-            pendingCommandClarification = nil
-            clarificationCustomText = ""
-            commandInputText = ""
-            executionSucceeded = true
-
-            // Learn the resolution so next time this input is recognized directly
-            await learnResolution(from: choice.command, originalInput: clarificationRawText)
-
-            await saveRecentSnippetIfNeeded(summary)
-            await loadSections()
         } catch {
             commandErrorMessage = error.localizedDescription
+            withAnimation(.easeInOut(duration: 0.2)) {
+                floatingErrorText = error.localizedDescription
+            }
         }
-
-        await saveCommandHistory(rawText: clarificationRawText, command: choice.command, success: executionSucceeded)
     }
 
-    private func learnResolution(from command: ParsedWorkoutCommand, originalInput: String) async {
-        guard let cache = commandInterpreter?.resolutionCache else { return }
-        switch command {
-        case .addSet(let c):
-            if case .exerciseName(let name) = c.target {
-                await cache.learn(rawInput: originalInput, resolvedExerciseName: name, resolvedIntent: "add_set")
+    private func loadRecents() async {
+        guard let recentItemsRepository else { return }
+
+        do {
+            let items = try await recentItemsRepository.fetchRecentSnippets(limit: 30)
+            var seen = Set<String>()
+            var deduped: [RecentWorkoutSnippetDTO] = []
+
+            for item in items {
+                let key = item.normalizedTitle
+                if seen.contains(key) { continue }
+                seen.insert(key)
+                deduped.append(item)
             }
-        case .addMultipleSets(let c):
-            if case .exerciseName(let name) = c.target {
-                await cache.learn(rawInput: originalInput, resolvedExerciseName: name, resolvedIntent: "add_multiple_sets")
+
+            withAnimation(.easeInOut(duration: 0.2)) {
+                recentSnippets = deduped
             }
-        case .addExercise(let c):
-            await cache.learn(rawInput: originalInput, resolvedExerciseName: c.name, resolvedIntent: "add_exercise")
-        default:
-            break
+        } catch {
+            // Keep UI resilient if recents fetch fails.
+        }
+    }
+
+    private func loadQuickAccessLibrary() async {
+        guard let exerciseRepository else { return }
+
+        do {
+            let templates = try await exerciseRepository.fetchFavoriteSnippets()
+                .filter { $0.snippetType.contains("template") }
+            let saved = try await exerciseRepository.fetchSavedExercises()
+
+            withAnimation(.easeInOut(duration: 0.2)) {
+                templateSnippets = templates
+                savedExercises = saved
+            }
+        } catch {
+            // Keep UI resilient if library fetch fails.
+        }
+    }
+
+    func applyTemplateSnippet(_ template: FavoriteWorkoutSnippetDTO) {
+        guard let workoutRepository else { return }
+
+        Task {
+            do {
+                let targetSessionID = try await resolveActiveSession(workoutRepository: workoutRepository).id
+                let payload = try decodeTemplatePayload(from: template.payloadJSON, fallbackName: template.title)
+
+                let added = try await workoutRepository.addExercise(
+                    toWorkoutSessionID: targetSessionID,
+                    name: payload.name,
+                    equipment: payload.equipment,
+                    savedExerciseID: template.savedExerciseID,
+                    isUnilateral: payload.isUnilateral
+                )
+
+                try await workoutRepository.updateExercise(
+                    id: added.id,
+                    name: nil,
+                    equipment: payload.equipment,
+                    notes: nil,
+                    isUnilateral: payload.isUnilateral,
+                    primaryMusclesText: payload.primaryMusclesText,
+                    secondaryMusclesText: payload.secondaryMusclesText
+                )
+
+                if !payload.sets.isEmpty {
+                    for set in payload.sets {
+                        _ = try await workoutRepository.addSet(
+                            toExerciseEntryID: added.id,
+                            reps: set.reps,
+                            weight: set.weight,
+                            unit: set.unit,
+                            side: set.side,
+                            notes: set.notes,
+                            isWarmup: set.isWarmup,
+                            isFailure: set.isFailure,
+                            durationSeconds: set.durationSeconds
+                        )
+                    }
+                }
+
+                if let exerciseRepository {
+                    try? await exerciseRepository.markUsed(id: template.savedExerciseID)
+                }
+
+                showRecentsSheet = false
+                await loadSectionsAndRecents()
+            } catch {
+                floatingErrorText = error.localizedDescription
+            }
+        }
+    }
+
+    func addSavedExerciseQuick(_ item: SavedExerciseDTO) {
+        Task {
+            do {
+                guard let workoutRepository else { return }
+                let session = try await resolveActiveSession(workoutRepository: workoutRepository)
+                let added = try await workoutRepository.addExercise(
+                    toWorkoutSessionID: session.id,
+                    name: item.name,
+                    equipment: item.equipment,
+                    savedExerciseID: item.id,
+                    isUnilateral: false
+                )
+
+                try await workoutRepository.updateExercise(
+                    id: added.id,
+                    name: nil,
+                    equipment: item.equipment,
+                    notes: nil,
+                    isUnilateral: false,
+                    primaryMusclesText: item.primaryMusclesText,
+                    secondaryMusclesText: item.secondaryMusclesText
+                )
+
+                if let exerciseRepository {
+                    try? await exerciseRepository.markUsed(id: item.id)
+                }
+
+                showRecentsSheet = false
+                await loadSectionsAndRecents()
+            } catch {
+                floatingErrorText = error.localizedDescription
+            }
+        }
+    }
+
+    private func decodeTemplatePayload(from rawJSON: String, fallbackName: String) throws -> ExerciseTemplatePayload {
+        guard let data = rawJSON.data(using: .utf8) else {
+            throw NSError(domain: "Template", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid template data"])
+        }
+        do {
+            return try JSONDecoder().decode(ExerciseTemplatePayload.self, from: data)
+        } catch {
+            let cleanedName = fallbackName
+                .replacingOccurrences(of: " empty template", with: "", options: .caseInsensitive)
+                .replacingOccurrences(of: " template", with: "", options: .caseInsensitive)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return ExerciseTemplatePayload(
+                name: cleanedName.isEmpty ? "Template Exercise" : cleanedName,
+                equipment: nil,
+                isUnilateral: false,
+                primaryMusclesText: nil,
+                secondaryMusclesText: nil,
+                sets: []
+            )
+        }
+    }
+
+    private func learnCommandResolutionIfNeeded(rawText: String, result: WorkoutCommandResult) async {
+        guard let commandResolutionCache, let exerciseIdentityResolver else { return }
+        guard result.action == .addExercise || result.action == .addSets || result.action == .repeatLastExercise else {
+            return
+        }
+
+        guard let exerciseName = result.exercise?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !exerciseName.isEmpty else {
+            return
+        }
+
+        if let resolution = try? await exerciseIdentityResolver.resolve(
+            rawInput: rawText,
+            hintedExerciseName: exerciseName,
+            hintedEquipment: result.equipment
+        ) {
+            await commandResolutionCache.learn(
+                rawInput: rawText,
+                resolvedExerciseName: resolution.canonicalName,
+                resolvedIntent: result.action.rawValue
+            )
         }
     }
 
@@ -761,12 +1463,12 @@ final class TodayViewModel {
         )
     }
 
-    private func saveCommandHistory(rawText: String, command: ParsedWorkoutCommand, success: Bool) async {
+    private func saveCommandHistory(rawText: String, commandType: String?, success: Bool) async {
         guard let commandHistoryRepository else { return }
         let item = CommandHistoryItemDTO(
             id: UUID(),
             rawText: rawText,
-            parsedCommandType: commandTypeName(for: command),
+            parsedCommandType: commandType,
             dayKey: dayKey,
             workoutSessionID: selectedWorkoutSessionID,
             createdAt: Date(),
@@ -775,35 +1477,62 @@ final class TodayViewModel {
         try? await commandHistoryRepository.save(item: item)
     }
 
-    private func metadata(for command: ParsedWorkoutCommand) -> ParsedCommandMetadata {
-        switch command {
-        case .addExercise(let command): return command.metadata
-        case .addSet(let command): return command.metadata
-        case .addMultipleSets(let command): return command.metadata
-        case .duplicateSet(let command): return command.metadata
-        case .updateSet(let command): return command.metadata
-        case .deleteSet(let command): return command.metadata
-        case .saveExerciseAsFavorite(let command): return command.metadata
-        case .saveSetAsFavorite(let command): return command.metadata
-        case .addFavoriteToWorkout(let command): return command.metadata
-        case .addRecentToWorkout(let command): return command.metadata
-        case .startWorkoutSession(let command): return command.metadata
-        case .switchWorkoutSession(let command): return command.metadata
-        case .askForConfirmation:
-            return ParsedCommandMetadata(
-                confidence: 0,
-                source: .fallback,
-                needsConfirmation: true,
-                userVisibleSummary: "Command requires confirmation"
-            )
-        case .unknown:
-            return ParsedCommandMetadata(
-                confidence: 0,
-                source: .fallback,
-                needsConfirmation: true,
-                userVisibleSummary: "Unknown command"
-            )
+    private struct SetSemantics {
+        var isWarmup: Bool
+        var isDropset: Bool
+        var side: String?
+        var restSeconds: Int32?
+        var notes: String?
+    }
+
+    private func parseSetSemantics(from result: WorkoutCommandResult) -> SetSemantics {
+        let raw = result.modifiers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+
+        let isWarmup = raw.contains(where: { $0 == "warmup" || $0 == "calentamiento" })
+        let isDropset = raw.contains(where: { $0 == "dropset" || $0 == "drop_set" || $0 == "drop set" })
+
+        let side: String?
+        if raw.contains(where: { $0 == "left" || $0 == "l" || $0 == "izquierda" }) {
+            side = "left"
+        } else if raw.contains(where: { $0 == "right" || $0 == "r" || $0 == "derecha" }) {
+            side = "right"
+        } else {
+            side = nil
         }
+
+        let restFromModifier = raw.compactMap { parseRestSeconds(modifier: $0) }.first
+        let restSeconds = result.restSeconds.flatMap { Int32(max(0, $0)) } ?? restFromModifier
+
+        var notes = result.notes?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if notes?.isEmpty == true {
+            notes = nil
+        }
+
+        if isDropset {
+            let marker = "[dropset]"
+            if let existingNotes = notes, !existingNotes.lowercased().contains(marker) {
+                notes = "\(marker) \(existingNotes)"
+            } else if notes == nil {
+                notes = marker
+            }
+        }
+
+        return SetSemantics(
+            isWarmup: isWarmup,
+            isDropset: isDropset,
+            side: side,
+            restSeconds: restSeconds,
+            notes: notes
+        )
+    }
+
+    private func parseRestSeconds(modifier: String) -> Int32? {
+        let compact = modifier.replacingOccurrences(of: " ", with: "")
+        guard compact.hasPrefix("rest_") || compact.hasPrefix("descanso_") else { return nil }
+
+        let digits = compact.filter(\.isNumber)
+        guard let value = Int(digits) else { return nil }
+        return Int32(max(0, value))
     }
 }
 
