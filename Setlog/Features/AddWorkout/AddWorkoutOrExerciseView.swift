@@ -27,11 +27,11 @@ struct AddWorkoutOrExerciseView: View {
                                 templatesSection()
                             }
 
-                            if !viewModel.ejerciciosBaseFiltrados.isEmpty || viewModel.searchText.isEmpty {
+                            if !viewModel.savedExercisesFiltered.isEmpty || viewModel.searchText.isEmpty {
                                 catalogSection()
                             }
 
-                            if viewModel.ejerciciosBaseFiltrados.isEmpty && viewModel.filteredTemplates.isEmpty && !viewModel.searchText.isEmpty {
+                            if viewModel.savedExercisesFiltered.isEmpty && viewModel.filteredTemplates.isEmpty && !viewModel.searchText.isEmpty {
                                 emptyState()
                             }
 
@@ -215,16 +215,16 @@ struct AddWorkoutOrExerciseView: View {
     @ViewBuilder
     private func catalogSection() -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Exercise Catalog")
+            Text("Saved Exercises")
                 .font(.system(size: 16, weight: .semibold))
                 .foregroundStyle(colorScheme == .dark ? .white : .black)
                 .padding(.horizontal, 20)
 
             LiquidGlassOuterCard(cornerRadius: 12) {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(viewModel.ejerciciosBaseFiltrados.enumerated()), id: \.element.id) { index, exercise in
+                    ForEach(Array(viewModel.savedExercisesFiltered.enumerated()), id: \.element.id) { index, exercise in
                         Button {
-                            viewModel.addEjercicioBase(exercise)
+                            viewModel.addSavedExercise(exercise)
                         } label: {
                             HStack(spacing: 12) {
                                 VStack(alignment: .leading, spacing: 6) {
@@ -233,25 +233,26 @@ struct AddWorkoutOrExerciseView: View {
                                         .foregroundStyle(colorScheme == .dark ? .white : .black)
 
                                     HStack(spacing: 8) {
-                                        if !exercise.musculos.isEmpty {
-                                            Text(exercise.musculos.map(displayMuscleName).joined(separator: ", "))
+                                        let muscles = musclesLabel(for: exercise)
+                                        if !muscles.isEmpty {
+                                            Text(muscles)
                                                 .font(.system(size: 12))
                                                 .foregroundStyle(.secondary)
                                                 .lineLimit(1)
                                         }
 
-                                        if !exercise.equipment.isEmpty {
-                                            if !exercise.musculos.isEmpty {
+                                        if let equipment = exercise.equipment, !equipment.isEmpty {
+                                            if !muscles.isEmpty {
                                                 Circle().fill(Color.secondary).frame(width: 4, height: 4)
                                             }
-                                            Text(exercise.equipment.joined(separator: ", "))
+                                            Text(equipment)
                                                 .font(.system(size: 12))
                                                 .foregroundStyle(.secondary)
                                                 .lineLimit(1)
                                         }
                                     }
 
-                                    if let description = exercise.description, !description.isEmpty {
+                                    if let description = exercise.descriptionText, !description.isEmpty {
                                         Text(description)
                                             .font(.system(size: 12))
                                             .foregroundStyle(.secondary.opacity(0.8))
@@ -267,7 +268,7 @@ struct AddWorkoutOrExerciseView: View {
                         }
                         .buttonStyle(.plain)
 
-                        if index < viewModel.ejerciciosBaseFiltrados.count - 1 {
+                        if index < viewModel.savedExercisesFiltered.count - 1 {
                             Divider().background(Color.secondary.opacity(0.2))
                         }
                     }
@@ -301,5 +302,19 @@ struct AddWorkoutOrExerciseView: View {
             .buttonStyle(.plain)
         }
         .padding(.top, 40)
+    }
+
+    private func musclesLabel(for exercise: SavedExerciseDTO) -> String {
+        let primary = splitCSV(exercise.primaryMusclesText)
+        let secondary = splitCSV(exercise.secondaryMusclesText)
+        return (primary + secondary).map(displayMuscleName).joined(separator: ", ")
+    }
+
+    private func splitCSV(_ raw: String?) -> [String] {
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
     }
 }

@@ -3,8 +3,14 @@ import UIKit
 
 struct TodayTopBar: UIViewRepresentable {
 
+    let dayKey: String
+    let dayDisplayFormat: String
+    let isEditingMode: Bool
     let onCalendarTap: () -> Void
-    let onSavedExercisesTap: () -> Void
+    let onDayTap: () -> Void
+    let onEnterEditTap: () -> Void
+    let onCancelEditTap: () -> Void
+    let onConfirmEditTap: () -> Void
 
     func makeUIView(context: Context) -> UIToolbar {
         let toolbar = UIToolbar()
@@ -13,29 +19,90 @@ struct TodayTopBar: UIViewRepresentable {
         toolbar.backgroundColor = .clear
         toolbar.isTranslucent = true
 
-        let calendarItem = UIBarButtonItem(
-            image: UIImage(systemName: "calendar"),
+        let trailingSystemName = isEditingMode ? "checkmark" : "pencil"
+        let trailingItem = UIBarButtonItem(
+            image: UIImage(systemName: trailingSystemName),
             style: .plain,
             target: context.coordinator,
-            action: #selector(Coordinator.didTapCalendar)
+            action: #selector(Coordinator.didTapTrailing)
         )
 
-        let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
-        
-        let savedItem = UIBarButtonItem(
-            image: UIImage(systemName: "dumbbell"),
-            style: .plain,
-            target: context.coordinator,
-            action: #selector(Coordinator.didTapSavedExercises)
-        )
+        if isEditingMode {
+            let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+            toolbar.items = [spacer, trailingItem]
+            context.coordinator.dayButton = nil
+        } else {
+            let leadingItem = UIBarButtonItem(
+                image: UIImage(systemName: "calendar"),
+                style: .plain,
+                target: context.coordinator,
+                action: #selector(Coordinator.didTapLeading)
+            )
 
-        toolbar.items = [calendarItem, spacer, savedItem]
+            let dayButton = UIButton(type: .system)
+            dayButton.addTarget(context.coordinator, action: #selector(Coordinator.didTapDay), for: .touchUpInside)
+            dayButton.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .medium)
+            let dayItem = UIBarButtonItem(customView: dayButton)
+            let spacerLeft = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+            let spacerRight = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+
+            toolbar.items = [leadingItem, spacerLeft, dayItem, spacerRight, trailingItem]
+            context.coordinator.dayButton = dayButton
+            updateDayButton(dayButton)
+        }
         return toolbar
     }
 
     func updateUIView(_ uiView: UIToolbar, context: Context) {
+        context.coordinator.isEditingMode = isEditingMode
         context.coordinator.onCalendarTap = onCalendarTap
-        context.coordinator.onSavedExercisesTap = onSavedExercisesTap
+        context.coordinator.onDayTap = onDayTap
+        context.coordinator.onEnterEditTap = onEnterEditTap
+        context.coordinator.onCancelEditTap = onCancelEditTap
+        context.coordinator.onConfirmEditTap = onConfirmEditTap
+
+        let currentCount = uiView.items?.count ?? 0
+        let expectedCount = isEditingMode ? 2 : 5
+        if currentCount != expectedCount {
+            if isEditingMode {
+                let trailingItem = UIBarButtonItem(
+                    image: UIImage(systemName: "checkmark"),
+                    style: .plain,
+                    target: context.coordinator,
+                    action: #selector(Coordinator.didTapTrailing)
+                )
+                let spacer = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+                uiView.items = [spacer, trailingItem]
+                context.coordinator.dayButton = nil
+            } else {
+                let leadingItem = UIBarButtonItem(
+                    image: UIImage(systemName: "calendar"),
+                    style: .plain,
+                    target: context.coordinator,
+                    action: #selector(Coordinator.didTapLeading)
+                )
+                let dayButton = UIButton(type: .system)
+                dayButton.addTarget(context.coordinator, action: #selector(Coordinator.didTapDay), for: .touchUpInside)
+                dayButton.titleLabel?.font = UIFont.systemFont(ofSize: 15, weight: .medium)
+                let dayItem = UIBarButtonItem(customView: dayButton)
+                let spacerLeft = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+                let spacerRight = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
+                let trailingItem = UIBarButtonItem(
+                    image: UIImage(systemName: "pencil"),
+                    style: .plain,
+                    target: context.coordinator,
+                    action: #selector(Coordinator.didTapTrailing)
+                )
+                uiView.items = [leadingItem, spacerLeft, dayItem, spacerRight, trailingItem]
+                context.coordinator.dayButton = dayButton
+                updateDayButton(dayButton)
+            }
+        } else {
+            uiView.items?.last?.image = UIImage(systemName: isEditingMode ? "checkmark" : "pencil")
+            if !isEditingMode, let dayButton = context.coordinator.dayButton {
+                updateDayButton(dayButton)
+            }
+        }
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: UIToolbar, context: Context) -> CGSize? {
@@ -53,19 +120,67 @@ struct TodayTopBar: UIViewRepresentable {
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onCalendarTap: onCalendarTap, onSavedExercisesTap: onSavedExercisesTap)
+        Coordinator(
+            isEditingMode: isEditingMode,
+            onCalendarTap: onCalendarTap,
+            onDayTap: onDayTap,
+            onEnterEditTap: onEnterEditTap,
+            onCancelEditTap: onCancelEditTap,
+            onConfirmEditTap: onConfirmEditTap
+        )
+    }
+
+    private func updateDayButton(_ button: UIButton) {
+        let title = formattedDay()
+        button.setTitle(title, for: .normal)
+        button.sizeToFit()
+    }
+
+    private func formattedDay() -> String {
+        guard let date = Date.date(fromDayKey: dayKey) else { return dayKey }
+        let formatter = DateFormatter()
+        formatter.dateFormat = dayDisplayFormat
+        formatter.locale = Locale.current
+        return formatter.string(from: date)
     }
 
     final class Coordinator: NSObject {
+        var isEditingMode: Bool
         var onCalendarTap: () -> Void
-        var onSavedExercisesTap: () -> Void
+        var onDayTap: () -> Void
+        var onEnterEditTap: () -> Void
+        var onCancelEditTap: () -> Void
+        var onConfirmEditTap: () -> Void
+        weak var dayButton: UIButton?
 
-        init(onCalendarTap: @escaping () -> Void, onSavedExercisesTap: @escaping () -> Void) {
+        init(
+            isEditingMode: Bool,
+            onCalendarTap: @escaping () -> Void,
+            onDayTap: @escaping () -> Void,
+            onEnterEditTap: @escaping () -> Void,
+            onCancelEditTap: @escaping () -> Void,
+            onConfirmEditTap: @escaping () -> Void
+        ) {
+            self.isEditingMode = isEditingMode
             self.onCalendarTap = onCalendarTap
-            self.onSavedExercisesTap = onSavedExercisesTap
+            self.onDayTap = onDayTap
+            self.onEnterEditTap = onEnterEditTap
+            self.onCancelEditTap = onCancelEditTap
+            self.onConfirmEditTap = onConfirmEditTap
         }
 
-        @objc func didTapCalendar() { onCalendarTap() }
-        @objc func didTapSavedExercises() { onSavedExercisesTap() }
+        @objc func didTapLeading() {
+            onCalendarTap()
+        }
+
+        @objc func didTapDay() { onDayTap() }
+
+        @objc func didTapTrailing() {
+            if isEditingMode {
+                onConfirmEditTap()
+            } else {
+                onEnterEditTap()
+            }
+        }
     }
 }

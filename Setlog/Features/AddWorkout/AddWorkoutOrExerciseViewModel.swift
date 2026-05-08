@@ -14,43 +14,47 @@ final class AddWorkoutOrExerciseViewModel {
 
     var sessions: [WorkoutSessionDTO] = []
     var selectedSessionID: UUID? = nil
-    var ejerciciosBase: [EjercicioBase] = []
+    var savedExercisesCatalog: [SavedExerciseDTO] = []
     var favoriteTemplates: [FavoriteWorkoutSnippetDTO] = []
 
     var todosLosMusculos: [String] {
-        EjerciciosBaseLoader.todosLosMusculos()
+        let values = savedExercisesCatalog
+            .flatMap { splitCSV($0.primaryMusclesText) + splitCSV($0.secondaryMusclesText) }
+        return Array(Set(values)).sorted()
     }
 
     var todosLosEquipment: [String] {
-        EjerciciosBaseLoader.todosLosEquipamientos()
+        let values = savedExercisesCatalog.compactMap { $0.equipment?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+        return Array(Set(values.filter { !$0.isEmpty })).sorted()
     }
 
-    var ejerciciosBaseFiltrados: [EjercicioBase] {
-        var filtrados = ejerciciosBase
+    var savedExercisesFiltered: [SavedExerciseDTO] {
+        var filtered = savedExercisesCatalog
 
         if !searchText.isEmpty {
-            filtrados = filtrados.filter { ejercicio in
-                ejercicio.name.localizedCaseInsensitiveContains(searchText) ||
-                ejercicio.musculos.joined(separator: " ").localizedCaseInsensitiveContains(searchText) ||
-                ejercicio.category.localizedCaseInsensitiveContains(searchText) ||
-                ejercicio.equipment.joined(separator: " ").localizedCaseInsensitiveContains(searchText) ||
-                (ejercicio.description?.localizedCaseInsensitiveContains(searchText) ?? false)
+            filtered = filtered.filter { exercise in
+                exercise.name.localizedCaseInsensitiveContains(searchText) ||
+                splitCSV(exercise.primaryMusclesText).joined(separator: " ").localizedCaseInsensitiveContains(searchText) ||
+                splitCSV(exercise.secondaryMusclesText).joined(separator: " ").localizedCaseInsensitiveContains(searchText) ||
+                (exercise.equipment?.localizedCaseInsensitiveContains(searchText) ?? false) ||
+                (exercise.descriptionText?.localizedCaseInsensitiveContains(searchText) ?? false)
             }
         }
 
         if let musculo = selectedMuscle {
-            filtrados = filtrados.filter { ejercicio in
-                ejercicio.musculos.contains { $0.localizedCaseInsensitiveCompare(musculo) == .orderedSame }
+            filtered = filtered.filter { exercise in
+                let all = splitCSV(exercise.primaryMusclesText) + splitCSV(exercise.secondaryMusclesText)
+                return all.contains { $0.localizedCaseInsensitiveCompare(musculo) == .orderedSame }
             }
         }
 
         if let equipment = selectedEquipment {
-            filtrados = filtrados.filter { ejercicio in
-                ejercicio.equipment.contains { $0.localizedCaseInsensitiveCompare(equipment) == .orderedSame }
+            filtered = filtered.filter { exercise in
+                exercise.equipment?.localizedCaseInsensitiveCompare(equipment) == .orderedSame
             }
         }
 
-        return filtrados
+        return filtered
     }
 
     var filteredTemplates: [FavoriteWorkoutSnippetDTO] {
@@ -94,7 +98,6 @@ final class AddWorkoutOrExerciseViewModel {
             defer { isLoading = false }
             guard let workoutRepository else { return }
             do {
-                ejerciciosBase = EjerciciosBaseLoader.cargarEjercicios()
                 let fetched = try await workoutRepository.fetchWorkoutSessions(dayKey: dayKey)
                 sessions = fetched.sorted { $0.orderIndex < $1.orderIndex }
                 if selectedSessionID == nil {
@@ -102,6 +105,7 @@ final class AddWorkoutOrExerciseViewModel {
                 }
 
                 if let exerciseRepository {
+                    savedExercisesCatalog = try await exerciseRepository.fetchSavedExercises()
                     favoriteTemplates = try await exerciseRepository.fetchFavoriteSnippets()
                         .filter { $0.snippetType.contains("template") }
                 }
@@ -143,13 +147,13 @@ final class AddWorkoutOrExerciseViewModel {
         }
     }
 
-    func addEjercicioBase(_ ejercicio: EjercicioBase) {
+    func addSavedExercise(_ exercise: SavedExerciseDTO) {
         Task {
             await addManualExercise(
-                name: ejercicio.name,
-                equipment: ejercicio.equipment.first,
-                primaryMusclesText: ejercicio.primary_muscles.joined(separator: ", "),
-                secondaryMusclesText: ejercicio.secondary_muscles.joined(separator: ", ")
+                name: exercise.name,
+                equipment: exercise.equipment,
+                primaryMusclesText: exercise.primaryMusclesText,
+                secondaryMusclesText: exercise.secondaryMusclesText
             )
         }
     }
@@ -305,5 +309,13 @@ final class AddWorkoutOrExerciseViewModel {
         sessions.sort { $0.orderIndex < $1.orderIndex }
         selectedSessionID = created.id
         return created.id
+    }
+
+    private func splitCSV(_ raw: String?) -> [String] {
+        guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
+        return raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
     }
 }

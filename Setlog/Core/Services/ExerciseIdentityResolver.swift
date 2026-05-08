@@ -15,7 +15,6 @@ struct ExerciseIdentityResolution {
     enum Source {
         case alias
         case exact
-        case catalog
         case semantic
         case created
     }
@@ -51,7 +50,6 @@ final class ExerciseIdentityResolver {
             try await persistMetadata(
                 savedExercise: matched,
                 equipment: hintedEquipment,
-                catalogMatch: nil,
                 aiPrimaryMusclesText: aiPrimaryMusclesText,
                 aiSecondaryMusclesText: aiSecondaryMusclesText
             )
@@ -62,47 +60,10 @@ final class ExerciseIdentityResolver {
             try await persistMetadata(
                 savedExercise: exact,
                 equipment: hintedEquipment,
-                catalogMatch: nil,
                 aiPrimaryMusclesText: aiPrimaryMusclesText,
                 aiSecondaryMusclesText: aiSecondaryMusclesText
             )
             return resolved(from: exact, source: .exact, confidence: 0.96)
-        }
-
-        let catalogMatch = ExerciseCatalogResolver.resolve(
-            commandText: baseName,
-            hintedEquipment: hintedEquipment
-        )
-
-        if let catalogMatch {
-            let catalogNormalized = Self.normalize(catalogMatch.canonicalName)
-            if let existing = savedExercises.first(where: { $0.normalizedName == catalogNormalized }) {
-                try await persistMetadata(
-                    savedExercise: existing,
-                    equipment: hintedEquipment,
-                    catalogMatch: catalogMatch,
-                    aiPrimaryMusclesText: aiPrimaryMusclesText,
-                    aiSecondaryMusclesText: aiSecondaryMusclesText
-                )
-                return resolved(from: existing, source: .catalog, confidence: max(0.85, catalogMatch.confidence))
-            }
-
-            let created = try await exerciseRepository.createSavedExercise(
-                name: catalogMatch.canonicalName,
-                equipment: hintedEquipment ?? catalogMatch.equipment
-            )
-            try await persistMetadata(
-                savedExercise: created,
-                equipment: hintedEquipment ?? catalogMatch.equipment,
-                catalogMatch: catalogMatch,
-                aiPrimaryMusclesText: aiPrimaryMusclesText,
-                aiSecondaryMusclesText: aiSecondaryMusclesText
-            )
-            if let alias = resolutionCache {
-                await alias.learn(rawInput: rawInput, resolvedExerciseName: catalogMatch.canonicalName, resolvedIntent: "add_exercise")
-            }
-            let refreshed = try await exerciseRepository.fetchSavedExercise(id: created.id) ?? created
-            return resolved(from: refreshed, source: .created, confidence: max(0.78, catalogMatch.confidence))
         }
 
         if let semantic = bestSemanticMatch(
@@ -113,7 +74,6 @@ final class ExerciseIdentityResolver {
             try await persistMetadata(
                 savedExercise: semantic,
                 equipment: hintedEquipment,
-                catalogMatch: nil,
                 aiPrimaryMusclesText: aiPrimaryMusclesText,
                 aiSecondaryMusclesText: aiSecondaryMusclesText
             )
@@ -127,7 +87,6 @@ final class ExerciseIdentityResolver {
         try await persistMetadata(
             savedExercise: created,
             equipment: hintedEquipment,
-            catalogMatch: nil,
             aiPrimaryMusclesText: aiPrimaryMusclesText,
             aiSecondaryMusclesText: aiSecondaryMusclesText
         )
@@ -175,14 +134,10 @@ final class ExerciseIdentityResolver {
     private func persistMetadata(
         savedExercise: SavedExerciseDTO,
         equipment: String?,
-        catalogMatch: ExerciseCatalogMatch?,
         aiPrimaryMusclesText: String?,
         aiSecondaryMusclesText: String?
     ) async throws {
-        let catalogPrimary = catalogMatch?.primaryMusclesText
-        let catalogSecondary = catalogMatch?.secondaryMusclesText
-
-        let resolvedEquipment = equipment ?? catalogMatch?.equipment ?? savedExercise.equipment
+        let resolvedEquipment = equipment ?? savedExercise.equipment
 
         let aiPrimary = aiPrimaryMusclesText?.trimmingCharacters(in: .whitespacesAndNewlines)
         let aiSecondary = aiSecondaryMusclesText?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -191,8 +146,8 @@ final class ExerciseIdentityResolver {
             id: savedExercise.id,
             name: nil,
             equipment: resolvedEquipment,
-            primaryMusclesText: catalogPrimary,
-            secondaryMusclesText: catalogSecondary,
+            primaryMusclesText: savedExercise.primaryMusclesText,
+            secondaryMusclesText: savedExercise.secondaryMusclesText,
             aiPrimaryMusclesText: aiPrimary?.isEmpty == false ? aiPrimary : nil,
             aiSecondaryMusclesText: aiSecondary?.isEmpty == false ? aiSecondary : nil
         )
